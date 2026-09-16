@@ -1,4 +1,5 @@
-"""Shooting gallery driven by the laser pointer.
+"""Games driven by the laser pointer: the shared round engine and the
+shooting gallery built on it (the maths games live in mathgames.py).
 
 Two ways to shoot, both read from the same stream of detections:
 
@@ -28,13 +29,13 @@ from . import overlay
 NORMAL, BONUS, DECOY = "normal", "bonus", "decoy"
 
 # Target colours avoid red entirely: the camera is looking at this screen, and
-# a red target would read as a second laser dot. Magenta and yellow are safe -
-# both drive the red channel, but never more than green or blue, so they carry
-# no "redness" for the detector to lock onto.
+# a red target would read as a second laser dot. That rules out magenta and
+# plain yellow as well - through the camera both carry enough red to be taken
+# for the laser (see overlay.py).
 COLOURS = {
     NORMAL: (255, 220, 60),     # cyan
-    BONUS: (60, 240, 255),      # yellow
-    DECOY: (255, 80, 255),      # magenta
+    BONUS: overlay.YELLOW,
+    DECOY: (255, 130, 90),      # blue
 }
 
 READY, PLAYING, PAUSED, OVER = "ready", "playing", "paused", "over"
@@ -48,6 +49,7 @@ class Target:
     born: float
     lifetime: float
     kind: str = NORMAL
+    label: str = ""             # what is written on it, for the maths games
     vx: float = 0.0
     vy: float = 0.0
     dwell: float = 0.0          # how long the beam has rested on it
@@ -135,38 +137,31 @@ class HighScores:
         return rank
 
 
-class Game:
-    """Round state: spawning, shooting, scoring, and the difficulty ramp."""
+class Round:
+    """What every game shares: the countdown, pausing, and turning the stream
+    of pointer positions into shots at whatever is in `targets`."""
 
-    DURATION = 60.0
-    LIVES = 3
     COUNTDOWN = 3.0
     DWELL_TIME = 0.35        # seconds on target for a dwell hit
-    FLASH_GAP = 0.15         # beam off at least this long before a flash counts
+    FLASH = True             # False: dwell is the only trigger
+    FLASH_GAP = 0.3          # the dot gone this long means the beam is off; less
+                             # is the detector missing frames, and changes nothing
     SHOT_VISIBLE = 0.7
-    DECOY_AFTER = 15.0       # seconds into the round before decoys appear
+    HINT = "point the laser at the targets"
+    scores_name: Optional[str] = None    # high-score file stem; None = no table
 
-    def __init__(self, screen_size: Tuple[int, int], duration: float = DURATION,
-                 lives: int = LIVES, seed: Optional[int] = None,
-                 margin: float = 0.10) -> None:
+    def __init__(self, screen_size: Tuple[int, int], seed: Optional[int] = None) -> None:
         self.screen_size = screen_size
-        self.duration = duration
-        self.lives_max = lives
         self.rng = random.Random(seed)
-        self.margin = margin
 
         self.state = READY
         self.started = 0.0
         self.now = 0.0
-        self.lives = lives
-        self.combo = 0
         self.stats = Stats()
         self.targets: List[Target] = []
         self.shots: List[Shot] = []
-        self.next_spawn = 0.0
-        self.level = 1
         self._paused_at = 0.0
-        self._beam_off_since: Optional[float] = None
+        self._beam_off_since: Optional[float] = None    # when the dot was lost
         self._beam_on = False
         self._dwelt: Optional[Target] = None
 
@@ -175,13 +170,9 @@ class Game:
         self.state = PLAYING
         self.started = now + self.COUNTDOWN
         self.now = now
-        self.lives = self.lives_max
-        self.combo = 0
         self.stats = Stats()
         self.targets.clear()
         self.shots.clear()
-        self.next_spawn = self.started
-        self.level = 1
 
     def toggle_pause(self, now: float) -> None:
         self.now = max(self.now, now)
@@ -189,13 +180,14 @@ class Game:
             self.state = PAUSED
             self._paused_at = now
         elif self.state == PAUSED:
-            # Shift every deadline by the time spent paused.
-            delta = now - self._paused_at
-            self.started += delta
-            self.next_spawn += delta
-            for t in self.targets:
-                t.born += delta
+            self._resume(now - self._paused_at)
             self.state = PLAYING
+
+    def _resume(self, delta: float) -> None:
+        """Shift every deadline by the time spent paused."""
+        self.started += delta
+        for t in self.targets:
+            t.born += delta
 
     @property
     def counting_down(self) -> bool:
@@ -205,9 +197,169 @@ class Game:
     def elapsed(self) -> float:
         return max(0.0, self.now - self.started)
 
+    # -- what a game fills in -----------------------------------------------
+    def _step(self, now: float, dt: float, point: Optional[Tuple[float, float]]) -> None:
+        raise NotImplementedError
+
+    def _finished(self) -> bool:
+        raise NotImplementedError
+
+    def _hit(self, target: Target, now: float, how: str) -> None:
+        raise NotImplementedError
+
+    def _miss(self, x: float, y: float, now: float) -> None:
+        pass
+
+    def _draw_target(self, canvas, t: Target, now: float) -> None:
+        raise NotImplementedError
+
+    def _draw_hud(self, canvas) -> None:
+        pass
+
+    def draw_over(self, canvas, scores: Optional[HighScores], rank: Optional[int]) -> None:
+        raise NotImplementedError
+
+    # -- the shot -----------------------------------------------------------
+    def _target_at(self, x: float, y: float, slack: float = 0.0) -> Optional[Target]:
+        live = [t for t in self.targets if t.dying is None and t.contains(x, y, slack)]
+        if not live:
+            return None
+        return min(live, key=lambda t: math.hypot(t.x - x, t.y - y))
+
+    def _beam(self, now: float, point: Optional[Tuple[float, float]]) -> bool:
+        """Follow the beam on and off. True when it has just been lit."""
+        if point is None:
+            if self._beam_off_since is None:
+                self._beam_off_since = now
+            if now - self._beam_off_since >= self.FLASH_GAP:
+                self._beam_on = False
+            return False
+        if self._beam_off_since is not None and now - self._beam_off_since >= self.FLASH_GAP:
+            self._beam_on = False
+        lit = not self._beam_on
+        self._beam_on, self._beam_off_since = True, None
+        return lit
+
+    def _aim(self, now: float, dt: float, point: Optional[Tuple[float, float]]) -> None:
+        lit = self._beam(now, point)
+        if point is None:
+            if not self._beam_on:
+                self._dwelt = None
+                for t in self.targets:
+                    t.dwell = 0.0
+            return                    # a dropped frame: the hold carries on
+        x, y = point
+        if self.FLASH and lit:
+            # The beam just appeared: that is a trigger pull.
+            target = self._target_at(x, y, slack=6.0)
+            if target is not None:
+                self._hit(target, now, "flash")
+            else:
+                self._miss(x, y, now)
+            self._dwelt = None
+            return
+        under = self._target_at(x, y)
+        if under is None:
+            self._dwelt = None
+            for t in self.targets:
+                t.dwell = 0.0
+            return
+        if self._dwelt is not under:
+            self._dwelt = under
+            under.dwell = 0.0
+        under.dwell += dt
+        if under.dwell >= self.DWELL_TIME:
+            self._hit(under, now, "dwell")
+            self._dwelt = None
+
+    # -- main update --------------------------------------------------------
+    def update(self, now: float, point: Optional[Tuple[float, float]]) -> None:
+        dt = max(0.0, min(0.1, now - self.now))
+        self.now = now
+        if self.state != PLAYING or self.counting_down:
+            self._beam(now, point)
+            return
+
+        self._step(now, dt, point)
+        self.shots = [s for s in self.shots if now - s.at <= self.SHOT_VISIBLE]
+
+        if self._finished():
+            self.state = OVER
+            self.targets.clear()      # nothing left to draw under the summary
+            self.shots.clear()
+
+    # -- drawing ------------------------------------------------------------
+    def draw(self, canvas) -> None:
+        now = self.now
+        for t in self.targets:
+            self._draw_target(canvas, t, now)
+        for s in self.shots:
+            self._draw_shot(canvas, s, now)
+        if self.state != OVER:
+            self._draw_hud(canvas)
+        if self.counting_down:
+            left = self.started - now
+            overlay.text_centered(canvas, str(max(1, int(math.ceil(left)))),
+                                  self.screen_size[1] // 2, 5.0, overlay.CYAN, 6)
+            overlay.text_centered(canvas, self.HINT,
+                                  self.screen_size[1] // 2 + 90, 0.9, overlay.WHITE)
+        if self.state == PAUSED:
+            overlay.draw_panel(canvas, [("PAUSED", 1.6, overlay.CYAN, 3),
+                                        ("P to resume    ESC to quit", 0.7, overlay.GREY, 1)],
+                               self.screen_size[1] / 2)
+
+    def _draw_shot(self, canvas, s: Shot, now: float) -> None:
+        k = (now - s.at) / self.SHOT_VISIBLE
+        fade = max(0.0, 1.0 - k)
+        colour = overlay.GREEN if s.good else overlay.YELLOW
+        overlay.text(canvas, s.text, (int(s.x) + 18, int(s.y) - 18 - int(30 * k)),
+                     0.7, tuple(int(c * fade) for c in colour), 2)
+        if not s.good:
+            d = 10
+            c = tuple(int(v * fade) for v in overlay.YELLOW)
+            cv2.line(canvas, (int(s.x) - d, int(s.y) - d), (int(s.x) + d, int(s.y) + d), c, 2)
+            cv2.line(canvas, (int(s.x) - d, int(s.y) + d), (int(s.x) + d, int(s.y) - d), c, 2)
+
+
+class Game(Round):
+    """The shooting gallery: spawning, scoring, and the difficulty ramp."""
+
+    DURATION = 60.0
+    LIVES = 3
+    DECOY_AFTER = 15.0       # seconds into the round before decoys appear
+    SPACING = 24.0           # clear pixels kept between two targets' rims
+    scores_name = "highscores"
+
+    def __init__(self, screen_size: Tuple[int, int], duration: float = DURATION,
+                 lives: int = LIVES, seed: Optional[int] = None,
+                 margin: float = 0.10) -> None:
+        super().__init__(screen_size, seed)
+        self.duration = duration
+        self.lives_max = lives
+        self.margin = margin
+        self.lives = lives
+        self.combo = 0
+        self.next_spawn = 0.0
+        self.level = 1
+
+    # -- round flow ---------------------------------------------------------
+    def start(self, now: float) -> None:
+        super().start(now)
+        self.lives = self.lives_max
+        self.combo = 0
+        self.next_spawn = self.started
+        self.level = 1
+
+    def _resume(self, delta: float) -> None:
+        super()._resume(delta)
+        self.next_spawn += delta
+
     @property
     def time_left(self) -> float:
         return max(0.0, self.duration - self.elapsed)
+
+    def _finished(self) -> bool:
+        return self.lives <= 0 or self.time_left <= 0
 
     # -- difficulty ---------------------------------------------------------
     def _ramp(self) -> float:
@@ -230,18 +382,14 @@ class Game:
         w, h = self.screen_size
         radius = self._radius() * self.rng.uniform(0.85, 1.15)
         mx, my = w * self.margin + radius, h * self.margin + radius
-        kind = NORMAL
-        roll = self.rng.random()
-        if self.elapsed > self.DECOY_AFTER and roll < 0.18:
-            kind = DECOY
-        elif roll > 0.88:
-            kind = BONUS
+        kind = self._pick_kind()
         if kind == BONUS:
             radius *= 0.65
         speed = 60.0 * self._ramp() * (1.6 if kind == BONUS else 1.0)
         angle = self.rng.uniform(0, 2 * math.pi)
+        x, y = self._free_spot(radius, mx, my)
         t = Target(
-            x=self.rng.uniform(mx, w - mx), y=self.rng.uniform(my, h - my),
+            x=x, y=y,
             radius=radius, born=now,
             lifetime=self._lifetime() * (0.7 if kind == BONUS else 1.0),
             kind=kind,
@@ -250,8 +398,46 @@ class Game:
         self.targets.append(t)
         return t
 
+    def _free_spot(self, radius: float, mx: float, my: float) -> Tuple[float, float]:
+        """Somewhere clear of the targets already up - or, on a screen too
+        crowded for that, the clearest of the spots tried."""
+        w, h = self.screen_size
+        best, best_gap = (w / 2.0, h / 2.0), -math.inf
+        for _ in range(40):
+            x, y = self.rng.uniform(mx, w - mx), self.rng.uniform(my, h - my)
+            gap = min((math.hypot(x - t.x, y - t.y) - t.radius - radius
+                       for t in self.targets), default=math.inf)
+            if gap >= self.SPACING:
+                return x, y
+            if gap > best_gap:
+                best, best_gap = (x, y), gap
+        return best
+
+    def _pick_kind(self) -> str:
+        roll = self.rng.random()
+        if self.elapsed > self.DECOY_AFTER and roll < 0.18:
+            return DECOY
+        if roll > 0.88:
+            return BONUS
+        return NORMAL
+
     def _move(self, dt: float) -> None:
         w, h = self.screen_size
+        # Targets drifting into each other bounce apart rather than overlap.
+        live = [t for t in self.targets if t.dying is None]
+        for i, a in enumerate(live):
+            for b in live[i + 1:]:
+                dx, dy = b.x - a.x, b.y - a.y
+                dist = math.hypot(dx, dy)
+                if dist == 0 or dist >= a.radius + b.radius + self.SPACING:
+                    continue
+                nx, ny = dx / dist, dy / dist
+                closing = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny
+                if closing > 0:
+                    a.vx -= closing * nx
+                    a.vy -= closing * ny
+                    b.vx += closing * nx
+                    b.vy += closing * ny
         for t in self.targets:
             if t.dying is not None or (t.vx == 0 and t.vy == 0):
                 continue
@@ -277,12 +463,6 @@ class Game:
         return 1.0 + 0.1 * min(self.combo, 10)
 
     # -- the shot -----------------------------------------------------------
-    def _target_at(self, x: float, y: float, slack: float = 0.0) -> Optional[Target]:
-        live = [t for t in self.targets if t.dying is None and t.contains(x, y, slack)]
-        if not live:
-            return None
-        return min(live, key=lambda t: math.hypot(t.x - x, t.y - y))
-
     def _hit(self, target: Target, now: float, how: str) -> None:
         target.dying = now
         if target.kind == DECOY:
@@ -290,7 +470,8 @@ class Game:
             self.lives -= 1
             self.stats.decoys += 1
             self.stats.score = max(0, self.stats.score - 25)
-            self.shots.append(Shot(target.x, target.y, now, -25, "DECOY -25", False))
+            self.shots.append(Shot(target.x, target.y, now, -25,
+                                   self._decoy_text(target), False))
             return
         points = self._points(target, now)
         self.combo += 1
@@ -305,23 +486,23 @@ class Game:
             label += "  SNAP"
         self.shots.append(Shot(target.x, target.y, now, points, label, True))
 
+    def _decoy_text(self, target: Target) -> str:
+        return "DECOY -25"
+
+    def _escape(self, target: Target, now: float) -> None:
+        """A target ran out of time unshot."""
+        if target.kind != DECOY:
+            self.stats.escaped += 1
+            self.combo = 0
+            self.lives -= 1
+
     def _miss(self, x: float, y: float, now: float) -> None:
         self.combo = 0
         self.stats.misses += 1
         self.shots.append(Shot(x, y, now, 0, "miss", False))
 
     # -- main update --------------------------------------------------------
-    def update(self, now: float, point: Optional[Tuple[float, float]]) -> None:
-        dt = max(0.0, min(0.1, now - self.now))
-        self.now = now
-        if self.state != PLAYING:
-            self._beam_on = point is not None
-            return
-
-        if self.counting_down:
-            self._beam_on = point is not None
-            return
-
+    def _step(self, now: float, dt: float, point: Optional[Tuple[float, float]]) -> None:
         self._move(dt)
 
         # Spawning and expiry.
@@ -335,75 +516,12 @@ class Game:
                 continue
             if t.age(now) >= t.lifetime:
                 self.targets.remove(t)
-                if t.kind != DECOY:
-                    self.stats.escaped += 1
-                    self.combo = 0
-                    self.lives -= 1
+                self._escape(t, now)
 
         self.level = 1 + int(self._ramp() * 4)
-
-        # Shooting.
-        was_on = self._beam_on
-        self._beam_on = point is not None
-        if point is None:
-            if was_on:
-                self._beam_off_since = now
-            self._dwelt = None
-            for t in self.targets:
-                t.dwell = 0.0
-        else:
-            x, y = point
-            gap = now - self._beam_off_since if self._beam_off_since is not None else None
-            if not was_on and (gap is None or gap >= self.FLASH_GAP):
-                # The beam just appeared: that is a trigger pull.
-                target = self._target_at(x, y, slack=6.0)
-                if target is not None:
-                    self._hit(target, now, "flash")
-                else:
-                    self._miss(x, y, now)
-                self._dwelt = None
-            else:
-                under = self._target_at(x, y)
-                if under is None:
-                    self._dwelt = None
-                    for t in self.targets:
-                        t.dwell = 0.0
-                else:
-                    if self._dwelt is not under:
-                        self._dwelt = under
-                        under.dwell = 0.0
-                    under.dwell += dt
-                    if under.dwell >= self.DWELL_TIME:
-                        self._hit(under, now, "dwell")
-                        self._dwelt = None
-
-        self.shots = [s for s in self.shots if now - s.at <= self.SHOT_VISIBLE]
-
-        if self.lives <= 0 or self.time_left <= 0:
-            self.state = OVER
-            self.targets.clear()      # nothing left to draw under the summary
-            self.shots.clear()
+        self._aim(now, dt, point)
 
     # -- drawing ------------------------------------------------------------
-    def draw(self, canvas) -> None:
-        now = self.now
-        for t in self.targets:
-            self._draw_target(canvas, t, now)
-        for s in self.shots:
-            self._draw_shot(canvas, s, now)
-        if self.state != OVER:
-            self._draw_hud(canvas)
-        if self.counting_down:
-            left = self.started - now
-            overlay.text_centered(canvas, str(max(1, int(math.ceil(left)))),
-                                  self.screen_size[1] // 2, 5.0, overlay.CYAN, 6)
-            overlay.text_centered(canvas, "point the laser at the targets",
-                                  self.screen_size[1] // 2 + 90, 0.9, overlay.WHITE)
-        if self.state == PAUSED:
-            overlay.draw_panel(canvas, [("PAUSED", 1.6, overlay.CYAN, 3),
-                                        ("P to resume    ESC to quit", 0.7, overlay.GREY, 1)],
-                               self.screen_size[1] / 2)
-
     def _draw_target(self, canvas, t: Target, now: float) -> None:
         colour = COLOURS[t.kind]
         x, y, r = int(t.x), int(t.y), int(t.radius)
@@ -431,20 +549,8 @@ class Game:
             overlay.text(canvas, "x3", (x + r + 10, y - r), 0.6, colour)
         if t.dwell > 0:
             cv2.ellipse(canvas, (x, y), (r - 6, r - 6), -90, 0,
-                        360 * min(1.0, t.dwell / Game.DWELL_TIME),
+                        360 * min(1.0, t.dwell / self.DWELL_TIME),
                         overlay.WHITE, 3, cv2.LINE_AA)
-
-    def _draw_shot(self, canvas, s: Shot, now: float) -> None:
-        k = (now - s.at) / self.SHOT_VISIBLE
-        fade = max(0.0, 1.0 - k)
-        colour = overlay.GREEN if s.good else overlay.YELLOW
-        overlay.text(canvas, s.text, (int(s.x) + 18, int(s.y) - 18 - int(30 * k)),
-                     0.7, tuple(int(c * fade) for c in colour), 2)
-        if not s.good:
-            d = 10
-            c = tuple(int(v * fade) for v in overlay.YELLOW)
-            cv2.line(canvas, (int(s.x) - d, int(s.y) - d), (int(s.x) + d, int(s.y) + d), c, 2)
-            cv2.line(canvas, (int(s.x) - d, int(s.y) + d), (int(s.x) + d, int(s.y) - d), c, 2)
 
     def _draw_hud(self, canvas) -> None:
         w = self.screen_size[0]
@@ -467,7 +573,7 @@ class Game:
             colour = overlay.GREEN if i < self.lives else overlay.DIM
             cv2.circle(canvas, (cx, 50), 12, colour, -1 if i < self.lives else 1, cv2.LINE_AA)
 
-    def draw_over(self, canvas, scores: HighScores, rank: Optional[int]) -> None:
+    def draw_over(self, canvas, scores: Optional[HighScores], rank: Optional[int]) -> None:
         s = self.stats
         lines = [
             ("GAME OVER" if self.lives <= 0 else "TIME", 1.8, overlay.CYAN, 3),
@@ -482,7 +588,7 @@ class Game:
         lines.append(("G play again    ESC back to tracking", 0.7, overlay.YELLOW, 1))
         overlay.draw_panel(canvas, lines, self.screen_size[1] * 0.42)
 
-        if scores.entries:
+        if scores is not None and scores.entries:
             y = int(self.screen_size[1] * 0.78)
             overlay.text_centered(canvas, "BEST", y, 0.7, overlay.CYAN)
             for i, e in enumerate(scores.entries):

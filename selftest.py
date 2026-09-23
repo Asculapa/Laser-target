@@ -5,13 +5,19 @@ solves a homography from the results and checks the round-trip accuracy.
 """
 from __future__ import annotations
 
+import json
+import math
+import re
 import sys
+import tempfile
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from laserapp import overlay
+from laserapp import overlay, story_art
+from laserapp import sound as audio
+from laserapp import story_script as script
 from laserapp.calibration import grid_points, solve
 from laserapp.lens import LensModel
 from laserapp.autocal import AutoCalibration, find_dot
@@ -21,15 +27,23 @@ from laserapp.mathgames import PACKS, BalloonMath, NumberHunt, make_task
 from laserapp.menu import GAMES, GameMenu
 from laserapp.silhouette import CENTRE_V, RING, Silhouette, zone
 from laserapp.detector import LaserDetector
+from laserapp import duel_art
+from laserapp.duel import ASSETS as DUEL_ASSETS, MUSIC, Duel, Lane
+from laserapp.story import (ASSETS, END, INTRO, LEVELS, OUTRO, PLAY, RESULT, RETRY, TITLE,
+                            Hold, Story)
+from laserapp.story_levels import (BRUTE, EYE, GLOAMLING, MOTH, SKY, Constellations, Ships,
+                                   Siege, Sparks, Star, Storm)
+
+audio.enabled = False               # the games are tested without their sound
 
 
 def synth_frame(size=(1280, 720), dot=None, noise=True, glare=0.0, bands=0.0,
-                dot_strength=1.0, decoy=False):
+                dot_strength=1.0, decoy=False, also=None):
     """A camera's view of a screen, with optional sunlight and display banding.
 
     `glare` washes one corner out the way sunlight on a screen does; `bands`
     adds the drifting rolling-shutter stripes a camera picks up when pointed
-    straight at a display.
+    straight at a display. `also` is a second laser: (x, y, strength).
     """
     w, h = size
     img = np.zeros((h, w, 3), np.uint8)
@@ -53,14 +67,14 @@ def synth_frame(size=(1280, 720), dot=None, noise=True, glare=0.0, bands=0.0,
 
     if noise:
         img = cv2.add(img, np.random.randint(0, 12, img.shape, dtype=np.uint8))
-    if dot is not None:
+    spots = [dot + (dot_strength,)] if dot is not None else []
+    for x, y, strength in spots + ([also] if also is not None else []):
         # A laser drives the red channel almost alone; only a strong spot
         # blows its core out to white.
-        x, y = dot
         layer = np.zeros_like(img)
         cv2.circle(layer, (int(x), int(y)), 7,
-                   (int(20 * dot_strength), int(20 * dot_strength), int(255 * dot_strength)), -1)
-        if dot_strength > 0.8:
+                   (int(20 * strength), int(20 * strength), int(255 * strength)), -1)
+        if strength > 0.8:
             cv2.circle(layer, (int(x), int(y)), 3, (230, 230, 255), -1)
         layer = cv2.GaussianBlur(layer, (9, 9), 0)
         img = cv2.add(img, layer)
@@ -118,6 +132,16 @@ def main() -> int:
     floor, _ = tuned.auto_threshold([synth_frame(decoy=True) for _ in range(3)])
     passed &= check("...and ignored after tuning",
                     tuned.detect(synth_frame(decoy=True)) is None, f"floor now {floor}")
+
+    # Two players, a laser each.
+    for strength in (1.0, 0.35):
+        both = det.detect_all(synth_frame(dot=(400, 300), also=(900, 500, strength)))
+        passed &= check(f"two lasers are both found (the second at {strength:.0%})",
+                        sorted((round(d.x), round(d.y)) for d in both)
+                        == [(400, 300), (900, 500)],
+                        ", ".join(f"({d.x:.0f}, {d.y:.0f})" for d in both))
+    passed &= check("...and one laser is still one",
+                    len(det.detect_all(synth_frame(dot=(400, 300)))) == 1)
 
     print("calibration:")
     # Pretend the camera views the screen from an angle: build a known homography,
@@ -566,6 +590,187 @@ def main() -> int:
                     f"{heights[0]:.0f}px -> {heights[-1]:.0f}px, {moved} moving")
     passed &= check("figures stay on screen, clear of the score line", on_screen)
 
+    print("range duel:")
+    size = (1920, 1080)
+    FOE, FRIEND = duel_art.FOE, duel_art.FRIEND
+    sides, reddest = {}, 0
+    for name in duel_art.LOOKS:
+        img, whose = duel_art.render(name, 380)
+        sides[name] = set(np.unique(whose)) - {0}
+        reddest = max(reddest, int((img[..., 2].astype(np.int16) - img[..., 1]).max()))
+    passed &= check("every figure is all armed or all unarmed - but for the one with a hostage",
+                    all(sides[n] == ({FOE, FRIEND} if l.mixed else {FOE} if l.foe else {FRIEND})
+                        for n, l in duel_art.LOOKS.items()),
+                    f"{len(duel_art.FOES)} armed, {len(duel_art.FRIENDS)} unarmed, "
+                    f"{len(duel_art.MIXED)} with a hostage")
+    passed &= check("no figure has any red in it", reddest <= 0)
+
+    def aim(t, side):
+        """A spot on figure `t` that belongs to `side`."""
+        _, whose = duel_art.render(t.look, t.height)
+        ys, xs = np.nonzero(whose == side)
+        k = len(xs) // 3
+        return (t.x - whose.shape[1] / 2 + xs[k] + 0.5, t.y - t.height / 2 + ys[k] + 0.5)
+
+    def duel(look, seed=4):
+        """A duel just past its countdown, with `look` up in both lanes."""
+        d = Duel(size, seed=seed)
+        d.start(0.0)
+        d.update(d.started - 0.2, None, [])
+        d.plan[:] = [type(d.plan[0])(0.0, 4, look, 3.0)]
+        d.update(d.started + 0.2, None, [])
+        return d, [lane.targets[0] for lane in d.lanes]
+
+    d = Duel(size, seed=4)
+    d.start(0.0)
+    passed &= check("both lanes are given the same figures",
+                    d.lanes[0].plan is d.lanes[1].plan and len(d.plan) > 40, f"{len(d.plan)}")
+    armed = sum(duel_art.LOOKS[p.look].foe for p in d.plan) / len(d.plan)
+    passed &= check("about two figures in three are armed", 0.5 <= armed <= 0.78, f"{armed:.0%}")
+    apart = True
+    for i, a in enumerate(d.plan):
+        apart &= not any(b.station == a.station and b.at < a.at + a.lifetime + Lane.DROP
+                         for b in d.plan[i + 1:])
+    passed &= check("no figure comes up where one is still standing", apart)
+    fits = True
+    for lane in d.lanes:
+        for x, foot, height in lane.stations:
+            half = duel_art.ASPECT * height / 2
+            fits &= lane.span[0] <= x - half and x + half <= lane.span[1] \
+                and foot - height >= 150 and foot <= 1080
+    passed &= check("every station is inside its own half, clear of the scores", fits)
+
+    d, (left, right) = duel("gunman")
+    d.update(d.now + 0.05, None, [aim(left, FOE)])
+    a, b = d.lanes
+    passed &= check("a flash on an armed figure scores for the player whose half it is in",
+                    a.score > 0 and a.stats.hits == 1 and b.score == 0 and left.dying is not None
+                    and right.dying is None, f"{a.score} : {b.score}")
+    d.update(d.now + 0.05, None, [aim(left, FOE), aim(right, FOE)])
+    passed &= check("a second dot, in the other half, is the other player's",
+                    b.stats.hits == 1 and a.stats.hits == 1 and b.score > 0)
+    d, (left, right) = duel("gunman")
+    d.update(d.now + 0.05, None, [aim(right, FOE), aim(left, FOE)])
+    passed &= check("two players can shoot in the same frame",
+                    [lane.stats.hits for lane in d.lanes] == [1, 1]
+                    and d.lanes[0].score == d.lanes[1].score)
+    d, (left, right) = duel("rifleman")
+    d.update(d.now + 0.05, aim(right, FOE))
+    passed &= check("a single pointer plays for the half it is in",
+                    [lane.stats.hits for lane in d.lanes] == [0, 1])
+    d, (left, right) = duel("gunman")
+    d.update(d.now + 0.05, None, [(left.x, left.y - left.height)])
+    passed &= check("a flash past the figure is a miss, and costs nothing",
+                    d.lanes[0].stats.misses == 1 and d.lanes[0].score == 0)
+
+    d, (left, right) = duel("woman")
+    d.update(d.now + 0.05, None, [aim(left, FRIEND)])
+    passed &= check("shooting someone unarmed costs more than a hit pays",
+                    d.lanes[0].score == -Lane.PENALTY and d.lanes[0].stats.decoys == 1
+                    and d.lanes[0].stats.hits == 0 and Lane.PENALTY > 100)
+    d.update(d.now + 5.0, None, [])
+    passed &= check("...and leaving them alone costs nothing",
+                    d.lanes[1].score == 0 and d.lanes[1].stats.escaped == 0)
+    d, (left, right) = duel("thug")
+    d.update(d.now + 5.0, None, [])
+    passed &= check("an armed figure nobody shot is counted as got away",
+                    [lane.stats.escaped for lane in d.lanes] == [1, 1])
+
+    d, (left, right) = duel("hostage")
+    d.update(d.now + 0.05, None, [aim(left, FRIEND), aim(right, FOE)])
+    a, b = d.lanes
+    plain, (_, other) = duel("gunman")
+    plain.update(plain.now + 0.05, None, [aim(other, FOE)])
+    passed &= check("with a hostage, it matters who the shot lands on",
+                    a.score == -Lane.PENALTY and b.stats.hits == 1
+                    and b.score > 1.8 * plain.lanes[1].score, f"{a.score} : {b.score}")
+
+    d, (left, right) = duel("gunman")
+    for _ in range(4):                                  # lit, then walked on to the figure
+        d.update(d.now + 0.05, None, [(left.x, left.y - left.height)])
+    held = 0
+    while left.dying is None and held < 40:
+        held += 1
+        d.update(d.now + 1 / 30, None, [aim(left, FOE)])
+    passed &= check("a beam held on an armed figure shoots it as well",
+                    d.lanes[0].stats.hits == 1 and d.lanes[0].stats.misses == 1,
+                    f"after {held / 30:.2f}s")
+
+    d, (left, right) = duel("gunman")
+    remaining, at, clock = left.remaining(d.now), d.now, d.time_left
+    d.toggle_pause(at)
+    d.update(at + 10, None, [aim(left, FOE)])
+    passed &= check("nothing can be shot while paused", d.lanes[0].stats.hits == 0)
+    d.toggle_pause(at + 30)
+    d.update(at + 30.01, None, [])
+    passed &= check("pausing stops the clock and the figures, in both lanes",
+                    abs(d.time_left - clock) < 0.05 and left.dying is None
+                    and abs(left.remaining(d.now) - remaining) < 0.01
+                    and abs(right.remaining(d.now) - remaining) < 0.01)
+
+    def play(d, bots):
+        """A round played by a bot per lane: (reaction time, shoots the unarmed too)."""
+        now, canvas, reddest = d.now, overlay.blank(size), 0
+        while d.state != "over" and now < d.now + 200:
+            now += 1 / 30
+            dots = []
+            for lane, (delay, careless) in zip(d.lanes, bots):
+                for t in lane.targets:
+                    foe = duel_art.LOOKS[t.look].foe
+                    if t.dying is None and t.age(now) > delay and (foe or careless) \
+                            and int(now * 30) % 6 < 3:      # the beam flashes on and off
+                        dots.append(aim(t, FOE if foe else FRIEND))
+                        break
+            d.update(now, dots[0] if dots else None, dots)
+            if int(now * 30) % 20 == 0:
+                canvas[:] = 0
+                d.draw(canvas)
+                reddest = max(reddest, int((canvas[..., 2].astype(np.int16)
+                                            - canvas[..., 1]).max()))
+        d.draw(canvas)
+        d.draw_over(canvas, None, None)
+        return reddest
+
+    d = Duel(size, seed=9)
+    d.start(0.0)
+    reddest = play(d, ((0.5, False), (0.9, True)))
+    a, b = d.lanes
+    passed &= check("a full round plays out, and the careful player wins it",
+                    d.state == "over" and d.winner == 0 and d.wins == [1, 0]
+                    and a.stats.decoys == 0 and b.stats.decoys > 5 and a.score > b.score,
+                    f"{a.score} : {b.score}")
+    passed &= check("nothing drawn in a duel is red", reddest <= 0)
+    passed &= check("G is a rematch: a new round, the rounds won kept",
+                    d.key(ord("g")) and d.state == "playing" and d.wins == [1, 0]
+                    and all(lane.score == 0 for lane in d.lanes))
+    play(d, ((0.6, False), (0.6, False)))
+    passed &= check("two players who shoot alike draw, and nobody is given the round",
+                    d.winner is None and d.wins == [1, 0]
+                    and d.lanes[0].score == d.lanes[1].score > 0,
+                    f"{d.lanes[0].score} : {d.lanes[1].score}")
+    x0, y0, x1, y1 = d.rematch_box()
+    button, now = ((x0 + x1) / 2, (y0 + y1) / 2), d.now
+    for _ in range(30):                                 # a beam still there from the round
+        now += 1 / 30
+        d.update(now, button, [button])
+    passed &= check("the rematch button waits for the last shots to be over",
+                    d.state == "over")
+    held = now
+    while d.state == "over" and now < held + 5:
+        now += 1 / 30
+        d.update(now, button, [(200.0, 300.0), button])
+        d.draw_over(overlay.blank(size), None, None)
+    passed &= check("a laser held on the rematch button starts the next round",
+                    d.state == "playing" and d.wins == [1, 0] and d.counting_down
+                    and all(lane.score == 0 for lane in d.lanes), f"after {now - held:.1f}s")
+    length = audio.Player(DUEL_ASSETS).length(MUSIC)
+    if length is None:
+        print("  SKIP  no music (tools/duel_audio.py) - the duel plays without")
+    else:
+        passed &= check("the music lasts the round out, countdown included",
+                        length >= Duel.COUNTDOWN + Duel.DURATION,
+                        f"{length:.0f}s")
+
     print("balloon math:")
     import random
 
@@ -794,7 +999,7 @@ def main() -> int:
                     picked is None and menu.page == 1, f"after {opened:.1f}s")
     while now < opened + 3 and picked is None:
         now += 0.05
-        picked = menu.update(now, centre(boxes[1]))
+        picked = menu.update(now, centre(menu.boxes()[1]))
     passed &= check("...and a second hold picks the level",
                     picked is not None and picked((1920, 1080)).level == 2)
     # A real laser: the detector loses the dot now and then, the hand shakes
@@ -826,12 +1031,384 @@ def main() -> int:
     names = [g.scores_name for g in made]
     passed &= check("every menu entry builds its game",
                     [type(g).__name__ for g in made] ==
-                    ["Game", "Silhouette"] + ["BalloonMath"] * 3 + ["NumberHunt"] * 2)
+                    ["Game", "Silhouette"] + ["BalloonMath"] * 3 + ["NumberHunt"] * 2
+                    + ["Story"] * 2 + ["Duel"])
     passed &= check("each scored game keeps its own table",
                     names == ["highscores", "highscores-silhouette", None, None, None,
-                              "highscores-hunt-5-6", "highscores-hunt-7-9"], str(names))
+                              "highscores-hunt-5-6", "highscores-hunt-7-9", None, None, None],
+                    str(names))
     passed &= check("ESC steps back a page, then out", menu.back() and not menu.back())
     menu.draw(overlay.blank((1920, 1080)))
+
+    print("story game:")
+    size = (1920, 1080)
+    english = script.ENGLISH
+    offered = [name for name, _ in GAMES[3].options]
+    passed &= check("the chooser offers the story in each language the font can draw",
+                    offered == [l.name for l in script.LANGUAGES.values()
+                                if overlay.UNICODE or l.name.isascii()], ", ".join(offered))
+    lines = english.all_lines()
+    ids = [l.id for l in lines]
+    passed &= check("every line has its own id", len(set(ids)) == len(ids), f"{len(lines)} lines")
+    passed &= check("every chapter has its scenes", len(english.chapters) == len(LEVELS) and
+                    all(c.intro and c.outro for c in english.chapters))
+    fields = lambda text: sorted(re.findall(r"{(\w+)}", text))
+    for code, lang in script.LANGUAGES.items():
+        said = lang.all_lines()
+        passed &= check(f"{lang.name}: every line and every label is there",
+                        [l.id for l in said] == ids and all(l.text.strip() for l in said) and
+                        lang.ui.keys() == english.ui.keys() and
+                        all(fields(lang.ui[k]) == fields(english.ui[k]) for k in english.ui),
+                        f"{len(said)} lines, {len(lang.ui)} labels")
+        player = audio.Player(ASSETS / code)
+        if player.texts:
+            silent = [l.id for l in said if player.length(l.id, l.text) is None]
+            spoken = sum(player.length(l.id) or 0.0 for l in said)
+            passed &= check(f"{lang.name}: every line's recording says what the script says",
+                            not silent, ", ".join(silent) or f"{spoken / 60:.1f} minutes of speech")
+        else:
+            print(f"  SKIP  {lang.name}: no recordings (build_story_audio.sh) - it plays as text")
+
+    def level(cls, seed=5):
+        """A chapter, just past its countdown."""
+        g = cls(size, seed=seed)
+        g.start(0.0)
+        g.update(g.started + 0.01, None)
+        return g
+
+    def run(g, seconds, aim=None):
+        end = g.now + seconds
+        while g.now < end and g.state != "over":
+            g.update(g.now + 1 / 30, aim(g) if aim else None)
+
+    def shoot(g, t):
+        """A flash: the beam off for half a second, then on, on the target."""
+        g.update(g.now + 0.5, None)
+        g.update(g.now + 0.03, (t.x, t.y))
+
+    def bot(g):
+        """Where a competent keeper would be pointing right now."""
+        live = [t for t in g.targets if t.dying is None and t.kind != MOTH]
+        if isinstance(g, Ships):
+            boats = [t for t in live if not t.guided]
+            return (boats[0].x, boats[0].y) if boats else None
+        if isinstance(g, Constellations):
+            live = [t for t in live if t.order == g.progress] if g.phase == g.PLAY else []
+        eye = [t for t in live if t.kind == EYE]
+        if eye:
+            return eye[0].x, eye[0].y
+        if not live or g.counting_down or g.now % 0.6 < 0.5:
+            return None                 # dark, then three frames on the target
+        t = min(live, key=lambda t: t.born)
+        return t.x, t.y
+
+    # 1 - sparks
+    g = level(Sparks)
+    run(g, 200, bot)
+    passed &= check("chapter 1: catching twenty sparks wins it",
+                    g.won and g.caught == 20 and g.stars == 3, f"{g.caught} caught")
+    g = level(Sparks)
+    run(g, 200)
+    passed &= check("...and eight lost to the wind lose it",
+                    g.state == "over" and not g.won and g.escaped == 8, f"{g.escaped} escaped")
+
+    # 2 - the siege
+    g = level(Siege)
+    run(g, 4.0)
+    foe = next(t for t in g.targets if t.kind == GLOAMLING)
+    far = math.hypot(foe.x - g.centre[0], foe.y - g.centre[1])
+    run(g, 1.0)
+    passed &= check("chapter 2: gloamlings make for the cage",
+                    math.hypot(foe.x - g.centre[0], foe.y - g.centre[1]) < far - 50)
+    while g.lives == g.LIVES and g.now < 60:
+        run(g, 0.1)
+    passed &= check("one that gets there puts out a spark", g.lives == g.LIVES - 1,
+                    f"after {g.elapsed:.0f}s")
+    g = level(Siege)
+    brute = g.spawn(g.now, BRUTE, (300.0, 300.0))
+    shoot(g, brute)
+    halves = [t for t in g.targets if t.dying is None]
+    passed &= check("a big one comes apart into two small ones",
+                    len(halves) == 2 and all(t.radius < brute.radius / 1.5 for t in halves))
+    g = level(Siege)
+    g._spawn_moth(g.now)
+    friend = g.targets[-1]
+    run(g, 1.0)
+    shoot(g, friend)
+    passed &= check("shooting a glow-moth costs a spark",
+                    g.lives == g.LIVES - 1 and g.stats.decoys == 1)
+    g = level(Siege)
+    run(g, 200, bot)
+    passed &= check("three waves beaten back win it", g.won and g.wave == 2 and g.stars == 3,
+                    f"{g.stats.hits} hits, {g.lives} sparks left")
+    g = level(Siege)
+    run(g, 6.0)
+    before = (g.elapsed, [(t.x, t.y) for t in g.targets])
+    g.toggle_pause(g.now)
+    for _ in range(30):
+        g.update(g.now + 1.0, None)
+    g.toggle_pause(g.now)
+    passed &= check("pausing a chapter stops its clock and everything in it",
+                    abs(g.elapsed - before[0]) < 0.01 and
+                    before[1] == [(t.x, t.y) for t in g.targets])
+
+    # 3 - the ships
+    g = level(Ships)
+    run(g, 1.0)
+    first = g.targets[0]
+    shoot(g, first)
+    passed &= check("chapter 3: a flash does not guide a boat", not first.guided)
+    run(g, 2.0, lambda g: (first.x, first.y))
+    passed &= check("...light held on it does, and it turns for the channel",
+                    first.guided and (first.vy > 0) == (g.channel > first.y))
+    while first in g.targets and g.now < 60:
+        run(g, 0.1)
+    passed &= check("...and comes home through the gap", g.safe == 1 and g.lives == g.LIVES,
+                    f"after {g.elapsed:.0f}s")
+    g = level(Ships)
+    run(g, 12.0)
+    passed &= check("a boat nobody lights is lost on the reef", g.lost == 1 and g.lives == 2)
+    g = level(Ships)
+    # A hand that shakes: every third frame the light is off the boat.
+    run(g, 200, lambda g: bot(g) if int(g.now * 30) % 3 else None)
+    passed &= check("the whole fleet can be brought home", g.won and g.safe == 9 and g.stars == 3,
+                    f"{g.safe} home, {g.lost} lost")
+
+    # 4 - the constellations
+    g = level(Constellations)
+    shoot(g, g.targets[0])
+    passed &= check("chapter 4: nothing can be lit while the pattern is shown",
+                    g.phase == g.SHOW and g.progress == 0 and g.lives == g.LIVES)
+    while g.phase != g.PLAY:
+        run(g, 0.1)
+    shoot(g, next(t for t in g.targets if t.order == 2))
+    passed &= check("a star out of order costs a spark, and the pattern is shown again",
+                    g.lives == g.LIVES - 1 and g.progress == 0 and g.phase == g.SHOW)
+    run(g, 200, bot)
+    passed &= check("tracing all three wins it - two stars, after that slip",
+                    g.won and g.index == 2 and g.stars == 2)
+    g = level(Constellations)
+    run(g, 200, bot)
+    passed &= check("...and three for a clean trace", g.won and g.stars == 3)
+    close = min(math.hypot(a.x - b.x, a.y - b.y) - a.radius - b.radius
+                for _, path, _, strays in SKY
+                for stars in [[Star(x=u * size[0], y=v * size[1], radius=g.unit * 0.05, born=0,
+                                    lifetime=1) for u, v in path + strays]]
+                for i, a in enumerate(stars) for b in stars[i + 1:])
+    passed &= check("no two stars are close enough to be confused", close > 20,
+                    f"closest rims {close:.0f} px apart")
+
+    # 5 - the storm
+    g = level(Storm)
+    while not g.targets:
+        run(g, 0.1)
+    shoot(g, g.targets[0])
+    passed &= check("chapter 5: striking an open knot hurts the Gloam",
+                    g.health == g.HEALTH - 1)
+    g = level(Storm)
+    run(g, 6.0)
+    thrown = [t for t in g.targets if t.kind == GLOAMLING]
+    passed &= check("a knot left alone closes, and sends a gloamling at the lamp",
+                    len(thrown) == 1 and thrown[0].goal == g.lamp and g.health == g.HEALTH)
+    g._throw(g.now, g.heart)
+    passed &= check("...but never two in quick succession",
+                    len([t for t in g.targets if t.kind == GLOAMLING]) == 1)
+    g = level(Storm)
+    g.health = 1
+    while not g.targets:
+        run(g, 0.1)
+    shoot(g, g.targets[0])
+    eye = next((t for t in g.targets if t.kind == EYE), None)
+    passed &= check("with its strength gone, the eye opens", g.final and eye is not None)
+    shoot(g, eye)
+    passed &= check("a flash is not enough for the eye", eye.dying is None and not g.ending)
+    run(g, 1.5, lambda g: (eye.x, eye.y))
+    held = eye.dying is None
+    run(g, 1.0, lambda g: (eye.x, eye.y))
+    passed &= check("...two seconds of light are", held and g.won and eye.dying is not None)
+    g = level(Storm)
+    run(g, 300, bot)
+    passed &= check("the whole fight can be won", g.won and g.stars == 3,
+                    f"in {g.elapsed:.0f}s, {g.lives} sparks left")
+
+    # buttons
+    hold, box, pressed = Hold(), [(100, 100, 300, 200)], []
+    for step in range(60):
+        on = (200.0, 150.0) if step % 6 else None       # the dot drops out now and then
+        pressed.append(hold.update(1 / 30, on, box))
+    passed &= check("a held button is pressed once, through lost frames",
+                    [p for p in pressed if p is not None] == [0],
+                    f"after {pressed.index(0) / 30:.1f}s")
+    hold = Hold()
+    pressed = [hold.update(1 / 30, (200.0, 150.0) if step < 20 else None, box)
+               for step in range(60)]
+    passed &= check("...and one that is let go is not", not any(p is not None for p in pressed)
+                    and hold.dwell == 0.0)
+
+    # the story around the chapters
+    with tempfile.TemporaryDirectory() as tmp:
+        def story():
+            s = Story(size, seed=2)
+            s.home = Path(tmp)
+            s.start(0.0)
+            return s
+
+        def step(s, seconds, point=None):
+            end = s.now + seconds
+            while s.now < end:
+                s.update(s.now + 1 / 30, point)
+
+        middle = lambda box: ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+        s = story()
+        boxes = s.title_boxes()
+        passed &= check("the story opens on its chapters, only the first unlocked",
+                        s.stage == TITLE and s.progress.unlocked == 1 and len(boxes) == 5 and
+                        all(0 <= x0 < x1 <= size[0] for x0, _, x1, _ in boxes))
+        step(s, 3.0, middle(boxes[1]))
+        passed &= check("a locked chapter cannot be chosen",
+                        s.stage == TITLE and not s.key(ord("2")))
+        step(s, 3.0, middle(boxes[0]))
+        passed &= check("holding the pointer on a chapter begins its scene",
+                        (s.stage, s.chapter, s.line.id) == (INTRO, 0, "c1i01"))
+        step(s, s._line_len + 1.0)
+        passed &= check("a line gives way to the next when it has been said",
+                        s.line_index == 1, s.line.id)
+        words = middle(s.dialogue_box())
+        step(s, 0.6)
+        step(s, 1.0, words)
+        passed &= check("a flash on the words asks for the next line - a resting beam does not",
+                        s.line_index == 2, s.line.id)
+        at = s.clock
+        s.toggle_pause(s.now)
+        step(s, 60.0)
+        s.toggle_pause(s.now)
+        passed &= check("pausing holds a scene where it is",
+                        s.line_index == 2 and s.clock == at and s.state == "playing")
+        passed &= check("a scene does not need to see the laser - only a chapter does",
+                        not s.needs_sight)
+        step(s, 1.5, middle(s.skip_box()))
+        passed &= check("holding on 'skip' goes straight to the chapter",
+                        s.stage == PLAY and isinstance(s.level, Sparks) and s.needs_sight)
+        while s.stage == PLAY:
+            s.update(s.now + 1 / 30, bot(s.level))
+        saved = json.loads((Path(tmp) / "story.json").read_text())
+        passed &= check("a chapter won is recorded, and unlocks the next",
+                        s.stage == RESULT and saved["unlocked"] == 2 and
+                        saved["best"]["1"]["stars"] == 3, str(saved))
+        step(s, 2.0, middle(s.button_box()))
+        passed &= check("...and is followed by the scene after it",
+                        (s.stage, s.line.id) == (OUTRO, "c1o01"))
+        passed &= check("ENTER skips a scene, into the next chapter's",
+                        s.key(13) and (s.stage, s.chapter, s.line.id) == (INTRO, 1, "c2i01"))
+        s.key(13)
+        while s.stage == PLAY:
+            s.update(s.now + 1 / 30, None)          # nobody at the shard
+        passed &= check("a chapter lost offers another go, and unlocks nothing",
+                        (s.stage, s.line.id) == (RETRY, "c2f") and s.progress.unlocked == 2)
+        lost = s.level
+        step(s, 2.0, middle(s.button_box()))
+        passed &= check("...which starts it afresh",
+                        s.stage == PLAY and s.level is not lost and s.level.lives == Siege.LIVES)
+
+        s = story()
+        passed &= check("the story is picked up where it was left",
+                        s.progress.unlocked == 2 and s.progress.stars(0) == 3 and
+                        s.progress.stars(1) == 0)
+        # The whole of it, start to finish - and everything it puts on screen.
+        s.key(ord("1"))
+        frames, reddest, stages = 0, -255, set()
+        canvas = overlay.blank(size)
+        while s.state != "over" and s.now < 3000:
+            if s.stage in (INTRO, OUTRO) and s.clock - s._line_at > 0.4:
+                s.key(32)
+            elif s.stage == RESULT and s.clock - s._stage_at > 0.5:
+                s.key(32)
+            s.update(s.now + 1 / 30, bot(s.level) if s.stage == PLAY else None)
+            frames += 1
+            if frames % 12 == 0:
+                s.draw(canvas)
+                stages.add(s.stage)
+                reddest = max(reddest, int((canvas[..., 2].astype(np.int16)
+                                            - canvas[..., 1]).max()))
+        s.draw(canvas)
+        s.draw_over(canvas, None, None)
+        passed &= check("the story can be played from the first chapter to the end",
+                        s.state == "over" and s.stage == END and s.progress.finished and
+                        s.progress.unlocked == 5 and
+                        all(s.progress.stars(i) >= 2 for i in range(5)) and s.total > 0,
+                        f"{s.now / 60:.0f} minutes without its scenes, score {s.total}")
+        passed &= check("nothing it draws has more red in it than green",
+                        reddest <= 0 and stages == {INTRO, PLAY, RESULT, OUTRO},
+                        f"red - green at most {reddest}")
+        # Scenery is rendered when first shown, and each scene has its own.
+        scenery = story_art.Backdrop(size)
+        for name in scenery.SCENES:
+            scenery.draw(canvas, name, 3.0)
+            reddest = max(reddest, int((canvas[..., 2].astype(np.int16) - canvas[..., 1]).max()))
+        used = {l.scene for l in lines if l.scene} | {cls.SCENE for cls in LEVELS}
+        # The same story in another language: every screen of it, drawn.
+        s = Story(size, seed=2, language="uk")
+        s.start(0.0)
+        s.draw(canvas)
+        shown = {s.stage}
+        while s.state != "over" and s.now < 3000:
+            if s.stage == TITLE:
+                s.key(ord("1"))
+            elif s.stage in (INTRO, OUTRO, RESULT) and s.clock - s._stage_at > 0.3:
+                s.key(13)
+            s.update(s.now + 1 / 30, bot(s.level) if s.stage == PLAY else None)
+            if s.stage not in shown or int(s.now * 30) % 45 == 0:
+                shown.add(s.stage)
+                s.draw(canvas)
+        s.draw_over(canvas, None, None)
+        passed &= check("...and in Ukrainian", s.state == "over" and
+                        s.words.chapters[0].title == "Іскри за вітром" and
+                        s.level.words is s.words and len(shown) == 6, ", ".join(sorted(shown)))
+        passed &= check("every scene the script names can be drawn",
+                        used <= set(scenery.SCENES) and reddest <= 0, ", ".join(sorted(used)))
+
+    class Tape:
+        """Stands in for the music player, and notes what it is asked to do."""
+        def __init__(self):
+            self.log, self.on = [], None
+        def music(self, name):
+            if name != self.on:
+                self.log.append(name)
+            self.on = name
+        def hold(self):
+            self.log.append("hold")
+        def release(self):
+            self.log.append("release")
+        def stop(self):
+            self.log.append("stop")
+            self.on = None
+
+    s = Story(size, seed=2)
+    s.start(0.0)
+    s.music = tape = Tape()
+    s.key(ord("1"))
+    s.update(s.now + 0.5, None)
+    passed &= check("a scene is left to the voices", s.stage == INTRO and not tape.log)
+    s.key(13)
+    s.update(s.now + 0.1, None)
+    s.toggle_pause(s.now)
+    s.toggle_pause(s.now + 5)
+    s.update(s.now + 5.1, None)
+    passed &= check("a chapter plays its own music, and pausing holds it",
+                    s.stage == PLAY and tape.log == ["c1", "hold", "release"], str(tape.log))
+    s.level.state = "over"                              # lost, as it happens
+    s.update(s.now + 0.1, None)
+    s.close()
+    passed &= check("...which stops when the chapter does",
+                    s.stage == RETRY and tape.log[3:] == ["stop", "stop"], str(tape.log))
+    pieces = audio.Player(ASSETS / "music")
+    lengths = [pieces.length(f"c{n + 1}") for n in range(len(LEVELS))]
+    if not any(lengths):
+        print("  SKIP  no music (tools/story_music.py) - the chapters play without")
+    else:
+        passed &= check("every chapter has its piece of music",
+                        all(l and l > 30 for l in lengths),
+                        "  ".join(f"{l:.0f}s" if l else "none" for l in lengths))
 
     print("\n" + ("ALL CHECKS PASSED" if passed else "SOME CHECKS FAILED"))
     return 0 if passed else 1

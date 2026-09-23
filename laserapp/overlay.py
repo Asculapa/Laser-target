@@ -27,6 +27,9 @@ WHITE = (255, 255, 220)
 GREY = (140, 140, 118)
 DIM = (70, 70, 60)
 FONT = cv2.FONT_HERSHEY_SIMPLEX
+# From OpenCV 5 on, putText draws with a real font that has more than ASCII
+# in it - Cyrillic, for one. Before that, anything else came out as "???".
+UNICODE = int(cv2.__version__.split(".")[0]) >= 5
 
 
 def blank(size: Tuple[int, int]) -> np.ndarray:
@@ -35,7 +38,9 @@ def blank(size: Tuple[int, int]) -> np.ndarray:
 
 def text(img, s, org, scale=0.6, color=WHITE, thickness=1, shadow=True):
     if shadow:
-        cv2.putText(img, s, (org[0] + 1, org[1] + 1), FONT, scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+        # The same weight as the text: a heavier shadow is also a wider one,
+        # and its last letters would show beyond the end of the word.
+        cv2.putText(img, s, (org[0] + 2, org[1] + 2), FONT, scale, (0, 0, 0), thickness, cv2.LINE_AA)
     cv2.putText(img, s, org, FONT, scale, color, thickness, cv2.LINE_AA)
 
 

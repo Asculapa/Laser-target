@@ -7,9 +7,12 @@ from typing import Callable, List, Optional, Tuple
 import cv2
 
 from . import overlay
+from .duel import Duel
 from .game import Game, Round
 from .mathgames import BalloonMath, NumberHunt
 from .silhouette import Silhouette
+from .story import Story
+from .story_script import LANGUAGES
 
 Factory = Callable[[Tuple[int, int]], Round]
 
@@ -33,6 +36,13 @@ GAMES = [
     Entry("Number Hunt", "grades 5-9", [
         (f"grades {pack}", lambda size, pack=pack: NumberHunt(size, pack))
         for pack in ("5-6", "7-9")
+    ]),
+    Entry("Story", "The Last Light of Lantern Rock", [
+        (lang.name, lambda size, code=code: Story(size, language=code))
+        for code, lang in LANGUAGES.items() if lang.name.isascii() or overlay.UNICODE
+    ]),
+    Entry("Range Duel", "two players, grades 8-9", [
+        ("duel", lambda size: Duel(size)),
     ]),
 ]
 

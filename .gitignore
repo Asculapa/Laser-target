@@ -1,7 +1,27 @@
-.venv/
+# Python
 __pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build output (build_windows.sh)
+dist/
+build/
+.build-cache/
+
+# Runtime data written by the app
 calibration.json
 highscores.json
 settings.json
-dist/
-.build-cache/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

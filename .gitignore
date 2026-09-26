@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+calibration.json
+highscores.json
+settings.json
+dist/
+.build-cache/

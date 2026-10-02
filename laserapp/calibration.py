@@ -240,6 +240,7 @@ class CalibrationSession:
     SETTLE = 0.8          # seconds of cooldown after each captured point
     HOLD_SAMPLES = 12     # consecutive steady detections needed
     HOLD_TOLERANCE = 5.0  # max spread (camera px) within those samples
+    MOVE_MIN = 20.0       # camera px the laser must have moved since the last point
 
     def __init__(self, screen_size: Tuple[int, int], camera_size: Tuple[int, int],
                  cols: int = 3, rows: int = 3, lens: bool = True,
@@ -255,6 +256,8 @@ class CalibrationSession:
         self.cooldown_until = time.time() + self.SETTLE
         self.message = "Point the laser at the marker and hold still"
         self.result: Optional[Calibration] = None
+        self.unmoved = False      # the laser is still where the last point was taken
+        self._seen_seq: Optional[int] = None
 
     # -- state --------------------------------------------------------------
     @property
@@ -270,11 +273,26 @@ class CalibrationSession:
         return self.index >= len(self.targets)
 
     # -- input --------------------------------------------------------------
-    def update(self, det: Optional[Detection]) -> None:
+    def update(self, det: Optional[Detection], seq: Optional[int] = None) -> None:
+        """Feed one detection. `seq` is the camera frame it came from: the
+        screen is redrawn more often than the camera delivers, and the same
+        frame seen twice is not two steady readings."""
         if self.done or time.time() < self.cooldown_until:
             self.samples.clear()
             return
         if det is None:
+            self.samples.clear()
+            self.unmoved = False
+            return
+        if seq is not None:
+            if seq == self._seen_seq:
+                return
+            self._seen_seq = seq
+        # A laser still resting on the marker just captured would be recorded
+        # for this one as well, pairing it with the wrong place on screen.
+        self.unmoved = bool(self.captured) and float(np.hypot(
+            det.x - self.captured[-1][0], det.y - self.captured[-1][1])) < self.MOVE_MIN
+        if self.unmoved:
             self.samples.clear()
             return
         self.samples.append((det.x, det.y))

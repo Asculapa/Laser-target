@@ -1,8 +1,14 @@
 """All on-screen drawing.
 
-Everything rendered here is deliberately free of saturated red: the camera is
-looking at this very screen, so red graphics would feed straight back into the
+Everything rendered here is deliberately free of red: the camera is looking
+at this very screen, so red graphics would feed straight back into the
 detector.
+
+What counts is the red the *camera* sees, which is more than the screen
+sends: measured through a webcam, small text in plain yellow or magenta was
+taken for the laser in every frame, and even white and grey came out faintly
+red. So the colours below are all held a little short on red - the yellow is
+nearer lime, the white and greys slightly cool.
 """
 from __future__ import annotations
 
@@ -16,10 +22,10 @@ import numpy as np
 
 CYAN = (255, 220, 60)
 GREEN = (120, 255, 120)
-YELLOW = (60, 240, 255)
-WHITE = (255, 255, 255)
-GREY = (140, 140, 140)
-DIM = (70, 70, 70)
+YELLOW = (60, 255, 190)
+WHITE = (255, 255, 220)
+GREY = (140, 140, 118)
+DIM = (70, 70, 60)
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
@@ -79,6 +85,15 @@ def text_centered(img, s, cy, scale=0.7, color=WHITE, thickness=1) -> int:
     (tw, _), _ = cv2.getTextSize(s, FONT, scale, thickness)
     text(img, s, ((img.shape[1] - tw) // 2, cy), scale, color, thickness)
     return tw
+
+
+def text_fit(img, s, centre, max_w: float, max_h: float, color=WHITE,
+             thickness: int = 2) -> None:
+    """Text centred on `centre`, as large as fits in a max_w x max_h box."""
+    (tw, th), _ = cv2.getTextSize(s, FONT, 1.0, thickness)
+    scale = min(max_w / tw, max_h / th)
+    (tw, th), _ = cv2.getTextSize(s, FONT, scale, thickness)
+    text(img, s, (int(centre[0] - tw / 2), int(centre[1] + th / 2)), scale, color, thickness)
 
 
 def draw_panel(img, lines, cy: float) -> None:
@@ -262,7 +277,7 @@ def draw_camera_picker(img, cams, highlight: int, current: Optional[int],
 
 
 HELP_LINES = [
-    ("G", "shooting game      P  pause"),
+    ("G", "games              P  pause"),
     ("M", "use the mouse as the pointer"),
     ("K", "calibrate automatically (no laser needed)"),
     ("C", "calibrate with the laser"),

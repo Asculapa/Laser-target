@@ -5,12 +5,12 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
 
-from . import autocal, overlay
+from . import autocal, overlay, sound
 from .game import HighScores, Round
 from .menu import Factory, GameMenu
 from .calibration import Calibration, CalibrationSession
@@ -104,6 +104,7 @@ class LaserApp:
         self._roi_key = None
         self.game: Optional[Round] = None
         self.menu: Optional[GameMenu] = None
+        sound.enabled = not args.no_sound
         self._game_factory: Optional[Factory] = None
         self._scores: dict = {}                      # high-score tables, by game
         self._game_rank: Optional[int] = None
@@ -119,6 +120,7 @@ class LaserApp:
         self.status_until = 0.0
         self.frame_seq = -1
         self.detection: Optional[Detection] = None
+        self._other_dots: List[Detection] = []       # weaker spots in the same frame
         self.render_fps = 0.0
         self.mouse = self._setup_mouse() if args.mouse else None
 
@@ -334,6 +336,15 @@ class LaserApp:
             return self._mouse_pos if self._mouse_down else None
         return self.map_to_screen(self.detection) if self.detection else None
 
+    def pointers(self) -> List[Tuple[float, float]]:
+        """Every dot on the screen, strongest first, for a game with two
+        players. The mouse is one pointer, wherever it is."""
+        if self.mouse_input or self.detection is None:
+            point = self.pointer()
+            return [point] if point is not None else []
+        points = [self.map_to_screen(d) for d in [self.detection] + self._other_dots]
+        return [p for p in points if p is not None]
+
     def _on_mouse(self, event, x, y, flags, param) -> None:
         if event == cv2.EVENT_LBUTTONDOWN:
             self._mouse_down = True
@@ -429,7 +440,9 @@ class LaserApp:
 
                 if seq != self.frame_seq:
                     self.frame_seq = seq
-                    self.detection = self.detector.detect(frame, self._roi(frame))
+                    found = self.detector.detect_all(frame, self._roi(frame))
+                    self.detection = found[0] if found else None
+                    self._other_dots = found[1:]
                 elif self.camera.age > STALE:
                     # The camera is dropping frames: better no pointer than
                     # one left standing where the laser last was.
@@ -472,6 +485,7 @@ class LaserApp:
                 if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                     break
         finally:
+            self._close_game()
             if self.camera is not None:
                 self.camera.release()
             cv2.destroyAllWindows()
@@ -484,7 +498,7 @@ class LaserApp:
         if self.mode not in (MODE_GAME, MODE_MENU):
             self._preview_before_game = self.preview
             self.preview = 0            # tiles and targets need the whole screen
-        self.game = None
+        self._close_game()
         self.menu = GameMenu(self.screen_size)
         self.mode = MODE_MENU
         self.show_help = False
@@ -513,7 +527,9 @@ class LaserApp:
             return
         self._game_factory = factory
         self.menu = None
+        self._close_game()
         self.game = factory(self.screen_size)
+        self.game.home = self.calib_path.parent
         self.game.start(time.time())
         self._game_rank = None
         self._blind_pause = False
@@ -522,9 +538,14 @@ class LaserApp:
         self.trail.clear()
         self.smoothed = None
 
+    def _close_game(self) -> None:
+        if self.game is not None:
+            self.game.close()
+        self.game = None
+
     def end_game(self) -> None:
         self.mode = MODE_TRACK
-        self.game = None
+        self._close_game()
         self.menu = None
         self.preview = self._preview_before_game
         self.smoothed = None
@@ -547,7 +568,7 @@ class LaserApp:
         # With no picture the laser cannot be seen, and a round left running
         # would cost lives for targets nobody could have shot. The mouse
         # pointer does not need the camera.
-        blind = self.camera.age > STALE and not self.mouse_input
+        blind = self.camera.age > STALE and not self.mouse_input and game.needs_sight
         if blind and game.state == "playing":
             game.toggle_pause(t)
             self._blind_pause = True
@@ -555,7 +576,12 @@ class LaserApp:
             if game.state == "paused":
                 game.toggle_pause(t)
             self._blind_pause = False
-        game.update(t, point)
+        points = [point] if point is not None else []
+        if game.players > 1:
+            points = self.pointers()
+            game.update(t, point, points)
+        else:
+            game.update(t, point)
 
         scores = self._scores_for(game)
         if game.state == "over" and self._game_rank is None:
@@ -565,9 +591,12 @@ class LaserApp:
         game.draw(canvas)
         if game.state == "over":
             game.draw_over(canvas, scores, self._game_rank or None)
-        elif point is not None:
-            overlay.draw_target(canvas, point[0], point[1], t, 1.0,
-                                crosshair=self.show_crosshair)
+        else:
+            # Crosshair lines run right across the screen - through the other
+            # player's half, when there is one.
+            for x, y in points:
+                overlay.draw_target(canvas, x, y, t, 1.0,
+                                    crosshair=self.show_crosshair and game.players == 1)
 
     # -- tracking -----------------------------------------------------------
     def step_tracking(self, canvas) -> None:
@@ -869,6 +898,9 @@ class LaserApp:
                 self.mouse_input = not self.mouse_input
             return True
 
+        if self.mode == MODE_GAME and self.game is not None and self.game.key(key):
+            return True
+
         if low == "g":
             # Mid-game G replays the same game; otherwise it opens the chooser.
             if self.mode == MODE_GAME:
@@ -972,6 +1004,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--mouse-pointer", action="store_true",
                    help="use the mouse as the pointer (hold the left button) - "
                         "handy for trying the game without a laser")
+    p.add_argument("--no-sound", action="store_true",
+                   help="no voices, music or sound effects")
     p.add_argument("--mouse", action="store_true",
                    help="also move the real mouse cursor (needs pyautogui)")
     return p.parse_args(argv)

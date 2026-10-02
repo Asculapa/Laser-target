@@ -16,6 +16,7 @@ build/
 # Runtime data written by the app
 calibration.json
 highscores*.json
+story.json
 settings.json
 
 # Editors / OS

@@ -148,7 +148,14 @@ class Round:
                              # is the detector missing frames, and changes nothing
     SHOT_VISIBLE = 0.7
     HINT = "point the laser at the targets"
+    PAUSE_TEXT = ("PAUSED", "P to resume    ESC to quit")
     scores_name: Optional[str] = None    # high-score file stem; None = no table
+    needs_sight = True                   # False while a game has no use for the
+                                         # pointer, and need not stop without it
+    players = 1                          # 2: update() is also given every dot on
+                                         # the screen, not just the strongest
+    home: Optional[Path] = None          # where a game may keep files of its own;
+                                         # the app sets it before start()
 
     def __init__(self, screen_size: Tuple[int, int], seed: Optional[int] = None) -> None:
         self.screen_size = screen_size
@@ -218,6 +225,14 @@ class Round:
 
     def draw_over(self, canvas, scores: Optional[HighScores], rank: Optional[int]) -> None:
         raise NotImplementedError
+
+    def key(self, key: int) -> bool:
+        """A key pressed during the game. True if the game took it, and the app
+        should leave it alone."""
+        return False
+
+    def close(self) -> None:
+        """The game is being left: stop whatever it has running."""
 
     # -- the shot -----------------------------------------------------------
     def _target_at(self, x: float, y: float, slack: float = 0.0) -> Optional[Target]:
@@ -304,8 +319,8 @@ class Round:
             overlay.text_centered(canvas, self.HINT,
                                   self.screen_size[1] // 2 + 90, 0.9, overlay.WHITE)
         if self.state == PAUSED:
-            overlay.draw_panel(canvas, [("PAUSED", 1.6, overlay.CYAN, 3),
-                                        ("P to resume    ESC to quit", 0.7, overlay.GREY, 1)],
+            overlay.draw_panel(canvas, [(self.PAUSE_TEXT[0], 1.6, overlay.CYAN, 3),
+                                        (self.PAUSE_TEXT[1], 0.7, overlay.GREY, 1)],
                                self.screen_size[1] / 2)
 
     def _draw_shot(self, canvas, s: Shot, now: float) -> None:

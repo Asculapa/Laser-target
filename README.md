@@ -2,8 +2,9 @@
 
 Points a webcam at your screen (or a projected copy of it), finds a red laser
 dot in the camera image, and draws an animated reticle on the screen exactly
-where the laser is. Includes four [games](#games) - a shooting gallery, a
-silhouette range and two maths games for school classes - press **G**.
+where the laser is. Includes [games](#games) - a shooting gallery, a
+silhouette range, two maths games for school classes, a voiced story in
+five chapters and a split-screen duel for two lasers - press **G**.
 
 Alignment comes from a **homography** solved during calibration: the screen is
 a plane, the camera sees it from some angle, so one 3x3 projective transform
@@ -168,6 +169,8 @@ or press its number; games with levels then ask which one. **ESC** steps back.
 | | | *silhouette*: a man-shaped range target with numbered rings, ten aimed shots |
 | **2** | Balloon Math | grades 2-4: hold the laser on the balloon with the right answer |
 | **3** | Number Hunt | grades 5-9: shoot only the numbers that fit the rule |
+| **4** | Story | *The Last Light of Lantern Rock*: five chapters, five different games, told aloud - in English or Ukrainian |
+| **5** | Range Duel | grades 8-9, two players: a half of the screen each, shoot the armed figures, spare the rest |
 
 During a game, **G** starts the same game again, **P** pauses and **ESC** goes
 back to tracking.
@@ -215,6 +218,168 @@ anything. Targets get smaller and quicker as the round goes on.
 
 Each pack keeps its own top five, in `highscores-hunt-5-6.json` and
 `highscores-hunt-7-9.json`.
+
+### The Last Light of Lantern Rock (story)
+
+A story in five chapters, told between the games and spoken aloud, in
+**English** or **Ukrainian** - picking Story in the chooser asks which. The lamp
+of the lighthouse on Lantern Rock has been shattered by a storm, and its light
+scattered; the old keeper, Maren, hands her apprentice - you - the shard at
+the heart of the lens. That shard is the laser. With it you gather the light
+again, hold off the Gloam, the fog that has waited a hundred years for the
+lamp to go out, and bring the fishing fleet home, in the company of Pip, a
+spark of the lamp that turns out to have opinions.
+
+Each chapter is a different game:
+
+| | | |
+| --- | --- | --- |
+| **1** | Sparks on the Wind | sparks blow across the sky: catch 20 before 8 are lost |
+| **2** | What the Dark Wants | gloamlings creep towards the cage of sparks from every side, in three waves; the big ones split in two. Leave the green glow-moths alone |
+| **3** | Ships in the Dark | boats sail for a reef they cannot see. *Hold* the light on a boat until its skipper turns for the channel, then find the next |
+| **4** | The Keepers' Stars | a constellation lights up star by star; trace it back in the same order. Three of them, each longer |
+| **5** | The Heart of the Storm | the Gloam itself: strike the bright knots as they open, keep its gloamlings off the lamp - and at the end, hold the light on its eye |
+
+A chapter is won or lost rather than timed. The sparks in the top right are
+what you have left to lose; run out and the chapter starts again, as often as
+it takes. Winning one earns one to three stars, unlocks the next and is saved
+in `story.json`, so the story can be put down and picked up later - **G**
+during the story goes back to the list of chapters, and any chapter already
+reached can be played again for a better result.
+
+Everything can be done with the pointer alone:
+
+* on the chapter list, hold the laser on a chapter (or press its number);
+* a scene moves on by itself as each line ends. To read faster, flash the
+  laser on the text box (or press **SPACE**); to skip the scene, hold the
+  laser on *skip* in the corner (or press **ENTER**);
+* after a chapter, hold on the button, press **SPACE**, or just wait.
+
+A scene does not need the camera, so it carries on if the camera stutters;
+only a chapter pauses itself then, as the other games do. **P** pauses
+anywhere, and a line that was being spoken goes on from where it stopped (on
+Windows it is said again from its beginning).
+
+#### Voices
+
+The lines are spoken - a narrator, Maren, Pip and the Gloam (Морок) - from
+recordings in `laserapp/assets/story/en/` and `uk/` (six to seven minutes
+of speech and 16 to 21 MB of WAV per language). They were made with text-to-speech models that
+run locally, and whose licences allow the recordings to be passed on with
+the app:
+
+* English: [Kokoro](https://github.com/hexgrad/kokoro) (Apache-2.0)
+* Ukrainian: [StyleTTS2 for Ukrainian](https://huggingface.co/spaces/patriotyk/styletts2-ukrainian)
+  by patriotyk (MIT), which also works out where the stress falls in a word
+
+Playback needs no extra Python package: it goes through PipeWire, PulseAudio
+or ALSA on Linux, and `winsound` on Windows. `--no-sound` keeps it quiet, and
+a machine with no sound simply shows the text, timed for reading.
+
+#### Music
+
+Each chapter has its own piece of music, which plays while the chapter is
+being played and stops with it - the scenes between are left to the voices.
+**P** holds it with everything else.
+
+| | | |
+| --- | --- | --- |
+| **1** | Sparks on the Wind | light and hopeful: bells over a slow major round |
+| **2** | What the Dark Wants | a heartbeat and a creeping bass, closing in |
+| **3** | Ships in the Dark | a slow rocking in six-eight, with the sea under it |
+| **4** | The Keepers' Stars | hardly there: single bells over a held chord, so as not to get in the way of remembering |
+| **5** | The Heart of the Storm | drums, thunder, and a tune that fights back |
+
+A chapter is not timed, so each piece is a loop of about forty seconds. They
+are synthesised by `tools/story_music.py` (numpy only, run with the
+project's Python) into `laserapp/assets/story/music/c1.wav` to `c5.wav`; a
+chapter whose file is missing simply plays without. On Windows the music is
+played through MCI, beside `winsound`, so that it does not cut the effects
+off; if that does not work on a machine, there is everything but the music.
+
+The words are kept apart from the code, one file per language:
+`laserapp/story_words_en.py` and `story_words_uk.py` hold every spoken line
+and every label on screen. After changing a line, record it again:
+
+    ./build_story_audio.sh            # whatever changed, both languages
+    ./build_story_audio.sh uk         # one language
+    ./build_story_audio.sh uk --only c1i03,c2f
+
+The first run sets the models up under `.build-cache/` (English about 0.5 GB,
+Ukrainian about 2.5 GB). A line whose text no longer matches its recording is
+shown without sound rather than with the wrong one, and the self-test says
+which lines those are.
+
+Where the Ukrainian model stresses a word wrongly, the word goes into `STRESS`
+in `story_words_uk.py` with a `+` after the stressed vowel (`"років":
+"рокі+в"`); `tools/story_audio.py --lang uk --stress`, run with the Ukrainian
+venv's Python, prints every line as it will be stressed, without recording.
+
+Ukrainian needs OpenCV 5, whose text drawing has Cyrillic letters in it; with
+an older OpenCV the chooser offers the story in English only. To add a
+language, copy a words file, add it to `LANGUAGES` in `story_script.py` and
+give it a voice in `tools/story_audio.py`.
+
+The pictures are drawn by the program (`story_art.py`), in the same palette
+as the rest of the app and for the same reason - see
+[A note on the colours](#a-note-on-the-colours). The self-test plays the
+whole story and checks that no pixel of it has more red than green.
+
+### Range Duel (grades 8-9, two players)
+
+Two players, a laser each, and the screen split down the middle: **player 1
+has the left half, player 2 the right**. Each half is a lane of a pop-up
+range - figures come up from behind two walls, stay for a moment (the bar on
+the wall is the time left) and go down again. Some are armed, some are not:
+
+| | |
+| --- | --- |
+| **Shoot** | a masked man with a pistol, a masked man with a rifle, a man in a cap and dark glasses with a knife raised |
+| **Spare** | a woman with a handbag, a man reading his phone, a man with his hands up, a medic with a bag |
+| **Both** | a gunman behind a woman he is holding: only what shows of him counts, and a shot that lands on her is a shot at her |
+
+They are told apart as on a real shoot / no-shoot range: by what is in the
+hands - the one bright thing on each figure - and by the face, which on the
+armed is masked or scowling.
+
+Both lanes are given **the same figures at the same moments**, so the only
+difference between the two scores is the two players. A round is 60 seconds;
+figures come quicker and leave sooner as it goes on.
+
+* An armed figure down is worth 60 to 100 points - more the sooner it is
+  shot - about half as much again on the far wall, and double for the gunman
+  with a hostage. Every hit in a row adds 0.1 to the multiplier, up to **x2**.
+* Shooting someone unarmed costs **200** and the streak, so shooting at
+  everything loses. A score can go below zero.
+* A flash that hits nothing, or an armed figure left standing, costs the
+  streak and nothing else.
+
+Flash and dwell both shoot, as in the [gallery](#shooting). Both scores stay
+at the top of the screen, the leader's underlined; at the end the round goes
+to the higher one, with each player's hits, mistakes, accuracy and reaction
+time. Holding either laser on the **REMATCH** button for a second starts the
+next round, as **G** does, and the rounds won are counted until the duel is
+left with **ESC**.
+
+**Two lasers, one camera.** Nothing tells one laser from the other except
+where it points: a dot counts for the half it is in, the strongest dot in
+each half. So a player who points into the other half is shooting for the
+opponent - at the opponent's civilians too - and keeping to one's own lane
+is a rule for the class, not something the program can enforce. With the
+mouse (**M**) there is one pointer, which plays for whichever half it is in.
+
+**Music and sound.** A piece of music runs the length of the round and
+builds as the clock runs down - a tune comes in at half time, and the last
+twelve seconds are a tone higher - with a ring for a hit, a buzz for someone
+unarmed and a fanfare at the end. All of it is synthesised by
+`tools/duel_audio.py` (numpy only) into `laserapp/assets/duel/`; edit the
+script and run it with the project's Python to change it. **P** pauses the
+music with the round. `--no-sound` keeps it quiet.
+
+The figures are drawn by the program (`duel_art.py`) rather than loaded from
+photographs, for the reason given in
+[A note on the colours](#a-note-on-the-colours): a photograph of a person is
+full of red, and the camera would take it for the laser.
 
 ## Shooting game
 
@@ -308,6 +473,7 @@ green: `(R, G, B) = (190, 255, 60)` is safe, `(255, 240, 60)` is not.
 | --- | --- |
 | `G` | games (chooser; during a game, play it again) |
 | `P` | pause (during the game) |
+| `SPACE` / `ENTER` | next line / skip the scene (in the story) |
 | `M` | use the mouse as the pointer |
 | `K` | calibrate automatically (no laser) |
 | `F` | auto-tune thresholds to the current scene |
@@ -384,6 +550,7 @@ If the spot still is not found:
     --mouse             also drive the real mouse cursor (needs `pyautogui`)
     --no-preview        start without the camera preview
     --mouse-pointer     use the mouse as the pointer instead of the laser
+    --no-sound          no voices, music or sound effects
     --no-trail          start with the trail off
 
 ## Wide-angle cameras
@@ -456,6 +623,18 @@ accuracy, then solves and inverts a known homography:
     laserapp/game.py         round engine (flash/dwell shots, pause), the shooting game, high scores
     laserapp/silhouette.py   silhouette range: the figure, its rings, ten aimed shots
     laserapp/mathgames.py    Balloon Math and Number Hunt
+    laserapp/story.py        the story game: chapter list, scenes, progress
+    laserapp/story_levels.py its five chapters
+    laserapp/story_script.py its script: who speaks when, over which picture
+    laserapp/story_words_*.py its words, one file per language
+    laserapp/story_art.py    its pictures
+    laserapp/duel.py         range duel: two lanes, two lasers, one score each
+    laserapp/duel_art.py     its figures, armed and unarmed
+    laserapp/assets/duel/    its music and sound effects (tools/duel_audio.py)
+    laserapp/sound.py        WAV playback, no dependencies
+    laserapp/assets/story/   the recorded voices, the sound effects, the music
+    tools/story_music.py     makes the music again
+    build_story_audio.sh     records the voices again (tools/story_audio.py)
     laserapp/menu.py         game chooser
     laserapp/autocal.py      automatic calibration: lit dots, differenced
     laserapp/lens.py         radial distortion model and its fit

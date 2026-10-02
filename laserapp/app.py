@@ -11,7 +11,8 @@ import cv2
 import numpy as np
 
 from . import autocal, overlay
-from .game import Game, HighScores
+from .game import HighScores, Round
+from .menu import Factory, GameMenu
 from .calibration import Calibration, CalibrationSession
 from .camera import Camera, CameraInfo, list_cameras, resolve_camera
 from .detector import Detection, LaserDetector
@@ -22,7 +23,11 @@ MODE_TRACK = "track"
 MODE_CALIB = "calibrate"
 MODE_AUTO = "auto"
 MODE_GAME = "game"
+MODE_MENU = "menu"
 MODE_PICK = "pick"
+
+# A camera picture older than this says nothing about where the laser is now.
+STALE = 0.3
 
 
 class LaserApp:
@@ -75,7 +80,7 @@ class LaserApp:
             self.open_picker(initial=True)
         else:
             self.camera_index, self.camera_name = chosen or resolve_camera(spec)
-            self.camera = self._open_camera(self.camera_index)
+            self.camera = self._open_camera(self.camera_index, self.camera_name)
             self.camera_size = self.camera.size
             print(f"[camera] using [{self.camera_index}] {self.camera_name} "
                   f"at {self.camera_size[0]}x{self.camera_size[1]}")
@@ -97,9 +102,12 @@ class LaserApp:
         self._maps_key = None
         self._roi_mask: Optional[np.ndarray] = None
         self._roi_key = None
-        self.game: Optional[Game] = None
-        self.scores = HighScores(self.calib_path.parent / "highscores.json")
+        self.game: Optional[Round] = None
+        self.menu: Optional[GameMenu] = None
+        self._game_factory: Optional[Factory] = None
+        self._scores: dict = {}                      # high-score tables, by game
         self._game_rank: Optional[int] = None
+        self._blind_pause = False                    # paused because the camera went blind
         self._preview_before_game = 0
         self.mouse_input = args.mouse_pointer
         self._mouse_pos = (0, 0)
@@ -142,7 +150,7 @@ class LaserApp:
         """Screen area in camera pixels, rebuilt only when it changes."""
         # Not while calibrating: if the camera has moved, the old screen
         # outline is wrong and would reject the very points being captured.
-        if self.calibration is None or self.mode not in (MODE_TRACK, MODE_GAME):
+        if self.calibration is None or self.mode not in (MODE_TRACK, MODE_GAME, MODE_MENU):
             return None
         size = frame.shape[1::-1]
         key = (id(self.calibration), size)
@@ -159,9 +167,10 @@ class LaserApp:
             self._maps_key = key
         return self._maps
 
-    def _open_camera(self, index: int) -> Camera:
+    def _open_camera(self, index: int, name: str = "") -> Camera:
         return Camera(
             index=index,
+            name=name,
             width=self.args.width,
             height=self.args.height,
             fps=self.args.fps,
@@ -180,7 +189,7 @@ class LaserApp:
             self.camera.release()
             self.camera = None
         try:
-            self.camera = self._open_camera(cam.index)
+            self.camera = self._open_camera(cam.index, cam.name)
         except RuntimeError:
             self.camera_index, self.camera_name = -1, "none"
             if previous is not None:          # fall back to what was working
@@ -398,12 +407,17 @@ class LaserApp:
                     continue
 
                 frame, seq = self.camera.read()
+                # A replugged camera can come back under a different number.
+                self.camera_index = self.camera.index
                 if frame is None:
                     # A freshly opened camera takes up to a second to deliver
-                    # its first frame; keep drawing so the screen never freezes.
+                    # its first frame, and one that has stalled is being
+                    # reopened; keep drawing so the screen never freezes.
+                    self.detection = None
+                    doing = "reconnecting" if self.camera.stalled else "starting"
                     canvas = overlay.blank(self.screen_size)
                     overlay.draw_panel(canvas, [
-                        (f"starting camera [{self.camera_index}] {self.camera_name}",
+                        (f"{doing} camera [{self.camera_index}] {self.camera_name}",
                          0.9, overlay.CYAN, 2),
                         ("V choose camera    N next camera    Q quit", 0.6, overlay.GREY, 1),
                     ], self.screen_size[1] / 2)
@@ -416,6 +430,10 @@ class LaserApp:
                 if seq != self.frame_seq:
                     self.frame_seq = seq
                     self.detection = self.detector.detect(frame, self._roi(frame))
+                elif self.camera.age > STALE:
+                    # The camera is dropping frames: better no pointer than
+                    # one left standing where the laser last was.
+                    self.detection = None
 
                 if (self.calibration is None and not self._auto_calibrated
                         and not self.args.no_auto_calibrate and self.mode == MODE_TRACK
@@ -430,6 +448,9 @@ class LaserApp:
                     self.step_auto(canvas, frame, seq)
                 elif self.mode == MODE_GAME:
                     self.step_game(canvas)
+                    self.draw_hud(canvas, frame)
+                elif self.mode == MODE_MENU:
+                    self.step_menu(canvas)
                     self.draw_hud(canvas, frame)
                 elif self.mode == MODE_CALIB:
                     self.step_calibration(canvas)
@@ -455,17 +476,47 @@ class LaserApp:
                 self.camera.release()
             cv2.destroyAllWindows()
 
-    # -- game ---------------------------------------------------------------
-    def start_game(self) -> None:
+    # -- games --------------------------------------------------------------
+    def open_menu(self) -> None:
         if self.calibration is None and not self.mouse_input:
             self.notify("calibrate first - press K", 4.0)
             return
-        if self.mode != MODE_GAME:
+        if self.mode not in (MODE_GAME, MODE_MENU):
             self._preview_before_game = self.preview
-            self.preview = 0            # targets need the whole screen
-        self.game = Game(self.screen_size)
+            self.preview = 0            # tiles and targets need the whole screen
+        self.game = None
+        self.menu = GameMenu(self.screen_size)
+        self.mode = MODE_MENU
+        self.show_help = False
+        self.trail.clear()
+        self.smoothed = None
+
+    def step_menu(self, canvas) -> None:
+        menu = self.menu
+        if menu is None:
+            self.mode = MODE_TRACK
+            return
+        t = time.time()
+        point = self.pointer()
+        choice = menu.update(t, point)
+        menu.draw(canvas)
+        if point is not None:
+            overlay.draw_target(canvas, point[0], point[1], t, 1.0, crosshair=False)
+        if choice is not None:
+            self.start_game(choice)
+
+    def start_game(self, factory: Optional[Factory] = None) -> None:
+        """Start the chosen game, or the last one again."""
+        factory = factory or self._game_factory
+        if factory is None:
+            self.open_menu()
+            return
+        self._game_factory = factory
+        self.menu = None
+        self.game = factory(self.screen_size)
         self.game.start(time.time())
         self._game_rank = None
+        self._blind_pause = False
         self.mode = MODE_GAME
         self.show_help = False
         self.trail.clear()
@@ -474,8 +525,17 @@ class LaserApp:
     def end_game(self) -> None:
         self.mode = MODE_TRACK
         self.game = None
+        self.menu = None
         self.preview = self._preview_before_game
         self.smoothed = None
+
+    def _scores_for(self, game: Round) -> Optional[HighScores]:
+        name = game.scores_name
+        if name is None:
+            return None
+        if name not in self._scores:
+            self._scores[name] = HighScores(self.calib_path.parent / f"{name}.json")
+        return self._scores[name]
 
     def step_game(self, canvas) -> None:
         game = self.game
@@ -484,15 +544,27 @@ class LaserApp:
             return
         t = time.time()
         point = self.pointer()
+        # With no picture the laser cannot be seen, and a round left running
+        # would cost lives for targets nobody could have shot. The mouse
+        # pointer does not need the camera.
+        blind = self.camera.age > STALE and not self.mouse_input
+        if blind and game.state == "playing":
+            game.toggle_pause(t)
+            self._blind_pause = True
+        elif self._blind_pause and not blind:
+            if game.state == "paused":
+                game.toggle_pause(t)
+            self._blind_pause = False
         game.update(t, point)
 
+        scores = self._scores_for(game)
         if game.state == "over" and self._game_rank is None:
-            self._game_rank = self.scores.add(
-                game.stats, time.strftime("%d %b %H:%M")) or 0
+            self._game_rank = (scores.add(game.stats, time.strftime("%d %b %H:%M"))
+                               if scores is not None else None) or 0
 
         game.draw(canvas)
         if game.state == "over":
-            game.draw_over(canvas, self.scores, self._game_rank or None)
+            game.draw_over(canvas, scores, self._game_rank or None)
         elif point is not None:
             overlay.draw_target(canvas, point[0], point[1], t, 1.0,
                                 crosshair=self.show_crosshair)
@@ -556,6 +628,8 @@ class LaserApp:
 
     # -- automatic calibration ---------------------------------------------
     def start_auto(self) -> None:
+        if self.mode in (MODE_GAME, MODE_MENU):
+            self.end_game()                 # puts the preview back, too
         self._window_size = (0, 0)          # re-check the window before dotting
         self.auto = autocal.AutoCalibration(
             self.screen_size, self.camera_size, lens=not self.args.no_lens)
@@ -592,6 +666,8 @@ class LaserApp:
 
     # -- calibration --------------------------------------------------------
     def start_calibration(self) -> None:
+        if self.mode in (MODE_GAME, MODE_MENU):
+            self.end_game()                 # puts the preview back, too
         self.session = CalibrationSession(
             self.screen_size, self.camera_size,
             cols=self.args.grid[0], rows=self.args.grid[1],
@@ -607,7 +683,7 @@ class LaserApp:
         s = self.session
         assert s is not None
         t = time.time()
-        s.update(self.detection)
+        s.update(self.detection, self.frame_seq)
 
         if s.done:
             if s.result is not None:
@@ -630,6 +706,8 @@ class LaserApp:
                     "[ ] , . to adjust, E/R for exposure", 0.7, overlay.YELLOW, 1)
         elif t < s.cooldown_until:
             hint = ("hold on...", 0.7, overlay.GREY, 1)
+        elif s.unmoved:
+            hint = ("captured - now move the laser to this marker", 0.7, overlay.YELLOW, 1)
         else:
             hint = (f"holding {int(s.progress * 100)}%", 0.7, overlay.GREEN, 1)
 
@@ -677,6 +755,12 @@ class LaserApp:
             bits.append(f"exp {self.camera.exposure:.0f}")
         overlay.text(canvas, "   ".join(bits), (20, h - 20), 0.55,
                      overlay.GREEN if self.detection else overlay.GREY)
+
+        if self.camera.loss > 0.05:
+            overlay.text(canvas,
+                         f"the camera is losing {self.camera.loss * 100:.0f}% of its frames - "
+                         "check its cable, or plug it straight into the computer",
+                         (20, h - 72), 0.6, overlay.YELLOW)
 
         # Redness is what the detector runs on, and a blown-out sensor has
         # none of it: no threshold can recover a spot the camera clipped.
@@ -741,6 +825,10 @@ class LaserApp:
         low = ch.lower()
 
         if key == 27:  # ESC
+            if self.mode == MODE_MENU:
+                if self.menu is None or not self.menu.back():
+                    self.end_game()
+                return True
             if self.mode == MODE_GAME:
                 self.end_game()
                 return True
@@ -770,10 +858,26 @@ class LaserApp:
                 self.session.back()
                 return True
 
+        if self.mode == MODE_MENU and self.menu is not None:
+            # Only the menu's own keys: anything else would change mode from
+            # under it.
+            if ch.isdigit() and ch != "0":
+                choice = self.menu.choose(int(ch) - 1)
+                if choice is not None:
+                    self.start_game(choice)
+            elif low == "m":
+                self.mouse_input = not self.mouse_input
+            return True
+
         if low == "g":
-            self.start_game()
+            # Mid-game G replays the same game; otherwise it opens the chooser.
+            if self.mode == MODE_GAME:
+                self.start_game()
+            else:
+                self.open_menu()
         elif low == "p" and self.mode == MODE_GAME and self.game is not None:
             self.game.toggle_pause(time.time())
+            self._blind_pause = False       # the player has taken over
         elif low == "c":
             self.start_calibration()
         elif low == "k":

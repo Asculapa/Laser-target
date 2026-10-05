@@ -103,7 +103,7 @@ class Silhouette(Round):
     last; the final few also walk along the line."""
 
     DWELL_TIME = 0.5         # an aimed shot: the beam has to rest, not just pass
-    HINT = "one shot at each figure - aim for the 10"
+    HINT = "по одному пострілу в кожну фігуру — цілься в десятку"
     SHOTS = 10
     SHOW = 1.1               # a shot figure stays up this long, to show the hit
     GAP = 0.5                # ...and the line stays empty this long after it
@@ -209,7 +209,7 @@ class Silhouette(Round):
             self.stats.reactions.append(t.age(now))
         else:
             self.stats.misses += 1
-            self.shots.append(Shot(point[0], point[1], now, 0, "miss", False))
+            self.shots.append(Shot(point[0], point[1], now, 0, "мимо", False))
         self._record(t, now, points, str(points))
 
     def _record(self, t: Figure, now: float, points: int, label: str) -> None:
@@ -230,7 +230,7 @@ class Silhouette(Round):
                     self._next_at = now + self.GAP
             elif t.age(now) >= t.lifetime:
                 self.stats.escaped += 1
-                self._record(t, now, 0, "too slow")
+                self._record(t, now, 0, "запізно")
             else:
                 self._move(t, dt)
         if not self.targets and len(self.results) < self.n_shots and now >= self._next_at:
@@ -292,7 +292,7 @@ class Silhouette(Round):
                          size * 6, size, colour, 3)
 
     def _draw_hud(self, canvas) -> None:
-        overlay.text(canvas, f"SCORE {self.stats.score}", (40, 60), 1.1, overlay.CYAN, 2)
+        overlay.text(canvas, f"РАХУНОК {self.stats.score}", (40, 60), 1.1, overlay.CYAN, 2)
         # The series so far: a number per figure shot, a dot per figure to come.
         step = 48
         x0 = self.screen_size[0] / 2 - step * (self.n_shots - 1) / 2
@@ -308,27 +308,32 @@ class Silhouette(Round):
                 cv2.circle(canvas, centre, 6, overlay.CYAN if now_up else overlay.DIM,
                            -1 if now_up else 1, cv2.LINE_AA)
 
+    def draw_pointer(self, canvas, x: float, y: float, t: float,
+                     crosshair: bool = False) -> None:
+        overlay.draw_scope(canvas, x, y, overlay.CYAN, self.screen_size[1] / 1080.0,
+                           self._kick(), crosshair)
+
     def draw_over(self, canvas, scores: Optional[HighScores], rank: Optional[int]) -> None:
         s = self.stats
         lines = [
-            ("SERIES OVER", 1.8, overlay.CYAN, 3),
-            (f"{s.score} of {BEST * self.n_shots}", 1.3, overlay.WHITE, 2),
+            ("СЕРІЮ ЗАВЕРШЕНО", 1.8, overlay.CYAN, 3),
+            (f"{s.score} з {BEST * self.n_shots}", 1.3, overlay.WHITE, 2),
             ("  ".join(str(p) for p in self.results), 0.9, overlay.GREEN, 2),
-            (f"{self.results.count(BEST)} tens   {s.misses} off the figure   "
-             f"{s.escaped} too slow   reaction {s.reaction:.2f}s", 0.75, overlay.GREY, 1),
+            (f"десяток: {self.results.count(BEST)}   повз фігуру: {s.misses}   "
+             f"запізно: {s.escaped}   реакція {s.reaction:.2f} с", 0.75, overlay.GREY, 1),
         ]
         if rank:
-            lines.append((f"NEW HIGH SCORE - #{rank}", 0.9, overlay.GREEN, 2))
-        lines.append(("G play again    ESC back to tracking", 0.7, overlay.YELLOW, 1))
+            lines.append((f"НОВИЙ РЕКОРД — №{rank}", 0.9, overlay.GREEN, 2))
+        lines.append(("G — грати ще    ESC — вихід", 0.7, overlay.YELLOW, 1))
         overlay.draw_panel(canvas, lines, self.screen_size[1] * 0.42)
 
         if scores is not None and scores.entries:
             y = int(self.screen_size[1] * 0.78)
-            overlay.text_centered(canvas, "BEST", y, 0.7, overlay.CYAN)
+            overlay.text_centered(canvas, "РЕКОРДИ", y, 0.7, overlay.CYAN)
             for i, e in enumerate(scores.entries):
                 y += 30
                 overlay.text_centered(
                     canvas,
-                    f"{i + 1}.  {e.get('score', 0):>4}   "
-                    f"{e.get('hits', 0)} on the figure   {e.get('date', '')}",
+                    f"{i + 1}.  {HighScores.who(e)}{e.get('score', 0):>4}   "
+                    f"у фігуру: {e.get('hits', 0)}   {e.get('date', '')}",
                     y, 0.6, overlay.WHITE if i + 1 == rank else overlay.GREY)

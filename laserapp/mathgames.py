@@ -5,8 +5,8 @@
 * **Number Hunt** (grades 5-9) - a rule at the top ("multiples of 7"),
   numbered targets drifting about; shoot the ones that fit, leave the rest.
 
-Everything on screen is digits and symbols: the built-in OpenCV font has no
-letters beyond ASCII, and numbers read the same in any classroom language.
+The words on screen are Ukrainian, like the rest of the interface; the sums
+themselves are digits and symbols.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 
 from . import overlay
+from .teacher import MathSettings
 from .game import (COLOURS, DECOY, NORMAL, OVER, Game, HighScores, Round, Shot,
                    Target)
 
@@ -34,17 +35,21 @@ class Task:
     choices: List[int]      # the answer and the wrong ones, shuffled
 
 
-def make_task(rng, level: int, n_choices: int) -> Task:
+def make_task(rng, level: int, n_choices: int, top: Optional[int] = None,
+              tables: Sequence[int] = range(2, 10)) -> Task:
     """One sum for `level`, with wrong answers a child could plausibly reach:
-    off by one or ten, or what the other operation would have given."""
+    off by one or ten, or what the other operation would have given. `top`
+    is how far adding and taking away go, `tables` which times tables come up."""
     near = [1, -1, 2, -2] + ([10, -10] if level >= 2 else [3, -3])
     if level == 3:
-        a, b = rng.randint(2, 9), rng.randint(2, 9)
-        answer, text = a * b, f"{a} x {b}"
+        a, b = rng.choice(list(tables)), rng.randint(2, 9)
+        if rng.random() < 0.5:
+            a, b = b, a
+        answer, text = a * b, f"{a} × {b}"
         wrong = [a * (b + 1), a * (b - 1), (a + 1) * b, (a - 1) * b, a + b]
         wrong += [answer + d for d in near[:4]]
     else:
-        top = 20 if level == 1 else 100
+        top = top or (20 if level == 1 else 100)
         if rng.random() < 0.5:
             a = rng.randint(1, top - 1) if level == 1 else rng.randint(11, top - 11)
             b = rng.randint(1 if level == 1 else 2, top - a)
@@ -83,14 +88,14 @@ class BalloonMath(Round):
 
     FLASH = False            # small hands wave the beam about; only a hold counts
     DWELL_TIME = 0.5
-    HINT = "hold the laser on the balloon with the right answer"
+    HINT = "затримай лазер на кульці з правильною відповіддю"
     TASKS = 10
     RISE = 1.2               # seconds for the balloons to float into place
     SOLVED_PAUSE = 1.4       # the finished sum stays up this long
-    LEVELS = {
-        1: "+ and -  up to 20",
-        2: "+ and -  up to 100",
-        3: "multiplication table",
+    LEVELS = {                # as the chooser shows them; the teacher sets the numbers
+        1: "+ і −, менші числа",
+        2: "+ і −, більші числа",
+        3: "таблиця множення",
     }
     PALETTE = (overlay.CYAN, overlay.YELLOW, BLUE, overlay.GREEN)
 
@@ -102,6 +107,7 @@ class BalloonMath(Round):
         self.n_choices = 3 if level == 1 else 4
         self.tasks: List[Task] = []
         self.results: List[bool] = []      # per solved sum: right first time?
+        self.settings = MathSettings()
         self.task: Optional[Task] = None
         self._solved: Optional[Task] = None
         self._clean = True
@@ -110,10 +116,14 @@ class BalloonMath(Round):
     # -- round flow ---------------------------------------------------------
     def start(self, now: float) -> None:
         super().start(now)
+        if self.home is not None:            # the teacher's settings, if the app has them
+            self.settings = MathSettings.load(self.home)
+            self.n_tasks = self.settings.tasks
+        top = self.settings.top1 if self.level == 1 else self.settings.top2
         self.tasks = []
         seen = set()
         while len(self.tasks) < self.n_tasks:
-            task = make_task(self.rng, self.level, self.n_choices)
+            task = make_task(self.rng, self.level, self.n_choices, top, self.settings.tables)
             if task.text not in seen or len(seen) > 40:
                 seen.add(task.text)
                 self.tasks.append(task)
@@ -191,12 +201,12 @@ class BalloonMath(Round):
             self.stats.misses += 1
             self._clean = False
             self.shots.append(Shot(target.x, target.y - target.radius, now, 0,
-                                   "try another one", False))
+                                   "спробуй іншу", False))
             return
         self.stats.hits += 1
         self.results.append(self._clean)
         self.stats.score = self.first_try
-        self.shots.append(Shot(target.x, target.y - target.radius, now, 1, "yes!", True))
+        self.shots.append(Shot(target.x, target.y - target.radius, now, 1, "так!", True))
         for t in self.targets:
             t.dying = now
         self._solved, self.task = self.task, None
@@ -260,6 +270,11 @@ class BalloonMath(Round):
             overlay.text_centered(canvas, f"{self._solved.text} = {self._solved.answer}",
                                   int(h * 0.24), scale, overlay.GREEN, max(2, int(scale * 2)))
 
+    def draw_pointer(self, canvas, x: float, y: float, t: float,
+                     crosshair: bool = False) -> None:
+        # Nothing here is shot at: a balloon is picked by holding a light on it.
+        overlay.draw_glow(canvas, x, y, overlay.YELLOW, self.screen_size[1] / 1080.0, t)
+
     def draw_over(self, canvas, scores: Optional[HighScores], rank: Optional[int]) -> None:
         w, h = self.screen_size
         size = h * 0.09
@@ -267,14 +282,29 @@ class BalloonMath(Round):
             centre = (w / 2 + (i - 1) * size * 2.6, h * 0.24)
             _star(canvas, centre, size, filled=i < self.stars)
         overlay.draw_panel(canvas, [
-            ("PERFECT!" if self.first_try == self.n_tasks
-             else ("WELL DONE!", "GOOD JOB!", "GREAT!")[self.stars - 1],
+            ("БЕЗДОГАННО!" if self.first_try == self.n_tasks
+             else ("МОЛОДЕЦЬ!", "ДУЖЕ ДОБРЕ!", "ЧУДОВО!")[self.stars - 1],
              1.8, overlay.CYAN, 3),
-            (f"{self.first_try} of {self.n_tasks} right the first time",
+            (f"з першої спроби: {self.first_try} з {self.n_tasks}",
              1.1, overlay.WHITE, 2),
-            (self.LEVELS.get(self.level, ""), 0.75, overlay.GREY, 1),
-            ("G play again    ESC back to tracking", 0.7, overlay.YELLOW, 1),
+            (self.settings.describe(self.level), 0.75, overlay.GREY, 1),
+            *[(line, 0.8, overlay.YELLOW, 2) for line in self.review()],
+            ("G — грати ще    ESC — вихід", 0.7, overlay.YELLOW, 1),
         ], h * 0.56)
+
+    def review(self) -> List[str]:
+        """For the teacher: the sums that were not right the first time."""
+        missed = [f"{t.text} = {t.answer}" for t, clean in zip(self.tasks, self.results)
+                  if not clean]
+        if not missed:
+            return []
+        lines, line = [], "Повторити:"
+        for m in missed[:8]:
+            if len(line) > 40:
+                lines.append(line)
+                line = ""
+            line += f"   {m}"
+        return lines + [line]
 
 
 def _star(canvas, centre, size: float, filled: bool) -> None:
@@ -314,28 +344,28 @@ def _is_prime(n: int) -> bool:
 
 def _multiples(rng) -> Rule:
     k = rng.choice((3, 4, 6, 7, 8, 9))
-    return Rule(f"multiples of {k}", lambda n: n % k == 0, range(k + 1, 100))
+    return Rule(f"кратні {k}", lambda n: n % k == 0, range(k + 1, 100))
 
 
 def _divisors(rng) -> Rule:
     n = rng.choice((24, 36, 48, 60))
-    return Rule(f"divisors of {n}", lambda d: n % d == 0, range(2, n // 2 + 1))
+    return Rule(f"дільники {n}", lambda d: n % d == 0, range(2, n // 2 + 1))
 
 
 def _parity(rng) -> Rule:
     even = rng.random() < 0.5
-    return Rule("even numbers" if even else "odd numbers",
+    return Rule("парні числа" if even else "непарні числа",
                 lambda n: (n % 2 == 0) == even, range(11, 200))
 
 
 def _primes(rng) -> Rule:
-    return Rule("prime numbers", _is_prime, range(2, 60))
+    return Rule("прості числа", _is_prime, range(2, 60))
 
 
 def _fractions(rng) -> Rule:
     p, q = rng.choice(((1, 2), (1, 3), (2, 3), (3, 4)))
     pool = [(a, b) for b in range(2, 17) for a in range(1, b)]
-    return Rule(f"equal to {p}/{q}", lambda v: v[0] * q == v[1] * p, pool,
+    return Rule(f"дорівнюють {p}/{q}", lambda v: v[0] * q == v[1] * p, pool,
                 lambda v: f"{v[0]}/{v[1]}")
 
 
@@ -364,14 +394,14 @@ def _squares(rng) -> Rule:
     squares = {n * n for n in range(1, 16)}
     # The near misses are what make it a question: 48, 50, 63, 65...
     pool = sorted(squares | {s + d for s in squares for d in (-2, -1, 1, 2) if s + d > 1})
-    return Rule("perfect squares", lambda n: n in squares, pool)
+    return Rule("квадрати чисел", lambda n: n in squares, pool)
 
 
 def _powers(rng) -> Rule:
     base = rng.choice((2, 3))
     powers = {base ** e for e in range(1, 9 if base == 2 else 6)}
     pool = sorted(powers | set(range(base, 100, base)))
-    return Rule(f"powers of {base}", lambda n: n in powers, pool)
+    return Rule(f"степені числа {base}", lambda n: n in powers, pool)
 
 
 PACKS = {
@@ -385,7 +415,7 @@ class NumberHunt(Game):
     and only the ones that fit the rule should be shot. A wrong number costs
     what a decoy costs; a right one that gets away costs a life."""
 
-    HINT = "shoot only the numbers that fit the rule"
+    HINT = "стріляй лише в числа, що підходять під правило"
     RULE_TIME = 15.0         # seconds per rule
     BANNER = 2.0             # a new rule is announced for this long, no targets
     MATCH_SHARE = 0.35       # chance a new target fits; see _pick_kind
@@ -400,13 +430,18 @@ class NumberHunt(Game):
         self.rule_index = 0
         self.banner_until = 0.0
         self._dry = 0            # targets in a row that did not fit
+        self.wrong: List[Tuple[str, str]] = []     # (number, rule) shot that did not fit
+        self.missed: List[Tuple[str, str]] = []    # and that fitted but got away
 
     @property
     def rule(self) -> Rule:
         return self.rules[self.rule_index]
 
     def start(self, now: float) -> None:
+        if self.home is not None:            # the teacher's settings, if the app has them
+            self.duration = float(MathSettings.load(self.home).hunt)
         super().start(now)
+        self.wrong, self.missed = [], []
         makers = list(PACKS[self.pack])
         self.rng.shuffle(makers)
         count = max(1, math.ceil(self.duration / self.RULE_TIME))
@@ -448,13 +483,15 @@ class NumberHunt(Game):
         return t
 
     def _decoy_text(self, target: Target) -> str:
-        return f"{target.label}: no  -25"
+        self.wrong.append((target.label, self.rule.text))
+        return f"{target.label}: ні  -25"
 
     def _escape(self, target: Target, now: float) -> None:
         super()._escape(target, now)
         if target.kind == NORMAL:
+            self.missed.append((target.label, self.rule.text))
             self.shots.append(Shot(target.x, target.y, now, 0,
-                                   f"missed {target.label}", False))
+                                   f"пропущено {target.label}", False))
 
     def _step(self, now: float, dt: float, point: Optional[Tuple[float, float]]) -> None:
         index = min(int(self.elapsed // self.RULE_TIME), len(self.rules) - 1)
@@ -490,12 +527,27 @@ class NumberHunt(Game):
                         360 * min(1.0, t.dwell / self.DWELL_TIME),
                         overlay.WHITE, 3, cv2.LINE_AA)
 
+    def review(self) -> List[Tuple[str, float, tuple, int]]:
+        """For the teacher: which numbers went wrong, and under which rule."""
+        def listed(pairs):
+            seen = []
+            for label, rule in pairs:
+                if (label, rule) not in seen:
+                    seen.append((label, rule))
+            return "   ".join(f"{label} ({rule})" for label, rule in seen[:5])
+        lines = []
+        if self.wrong:
+            lines.append((f"Не підходили: {listed(self.wrong)}", 0.7, overlay.YELLOW, 1))
+        if self.missed:
+            lines.append((f"Пропущені: {listed(self.missed)}", 0.7, overlay.YELLOW, 1))
+        return lines
+
     def _draw_hud(self, canvas) -> None:
         super()._draw_hud(canvas)
-        overlay.text_centered(canvas, f"SHOOT:  {self.rule.text}", 150, 1.4,
+        overlay.text_centered(canvas, f"СТРІЛЯЙ:  {self.rule.text}", 150, 1.4,
                               overlay.YELLOW, 3)
         if self.state != OVER and self.now < self.banner_until:
             overlay.draw_panel(canvas, [
-                ("NEW RULE", 1.0, overlay.CYAN, 2),
+                ("НОВЕ ПРАВИЛО", 1.0, overlay.CYAN, 2),
                 (self.rule.text, 2.2, overlay.YELLOW, 4),
             ], self.screen_size[1] / 2)

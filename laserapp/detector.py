@@ -14,7 +14,7 @@ frame's own noise, so the detector re-tunes itself as the light changes.
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -109,6 +109,15 @@ class LaserDetector:
     def detect(self, frame: np.ndarray,
                roi: Optional[np.ndarray] = None) -> Optional[Detection]:
         """Find the laser spot. `roi` limits the search to the screen area."""
+        found = self.detect_all(frame, roi)
+        return found[0] if found else None
+
+    def detect_all(self, frame: np.ndarray, roi: Optional[np.ndarray] = None,
+                   share: float = 0.1) -> List[Detection]:
+        """Every laser spot in view, strongest first, for a game with two
+        pointers. A spot scoring under `share` of the strongest is left out:
+        two pointers are never that far apart in brightness, and a speck
+        beside a blazing dot is its reflection, not a second laser."""
         s = self.s
         top = self._local_redness(frame)
         r = self._red_channel
@@ -146,10 +155,7 @@ class LaserDetector:
 
         n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
         self.candidates = max(0, n - 1)
-        if n <= 1:
-            return None
-
-        best: Optional[Detection] = None
+        found: List[Detection] = []
         for i in range(1, n):
             area = int(stats[i, cv2.CC_STAT_AREA])
             if area < s.min_area or area > s.max_area:
@@ -169,7 +175,8 @@ class LaserDetector:
                 continue
             cx = x0 + m["m10"] / m["m00"]
             cy = y0 + m["m01"] / m["m00"]
-            score = float(m["m00"])
-            if best is None or score > best.score:
-                best = Detection(cx, cy, area, score, float(np.sqrt(area / np.pi)))
-        return best
+            found.append(Detection(cx, cy, area, float(m["m00"]),
+                                   float(np.sqrt(area / np.pi))))
+        # Stable, so of two equal spots the first found still wins.
+        found.sort(key=lambda d: d.score, reverse=True)
+        return [d for d in found if d.score >= share * found[0].score]

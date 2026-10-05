@@ -5,14 +5,15 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
 
-from . import autocal, overlay
+from . import autocal, names, overlay, sound
 from .game import HighScores, Round
-from .menu import Factory, GameMenu
+from .menu import AGAIN, EndButtons, Factory, GameMenu
+from .names import NameEntry
 from .calibration import Calibration, CalibrationSession
 from .camera import Camera, CameraInfo, list_cameras, resolve_camera
 from .detector import Detection, LaserDetector
@@ -104,6 +105,7 @@ class LaserApp:
         self._roi_key = None
         self.game: Optional[Round] = None
         self.menu: Optional[GameMenu] = None
+        sound.enabled = not args.no_sound
         self._game_factory: Optional[Factory] = None
         self._scores: dict = {}                      # high-score tables, by game
         self._game_rank: Optional[int] = None
@@ -119,15 +121,16 @@ class LaserApp:
         self.status_until = 0.0
         self.frame_seq = -1
         self.detection: Optional[Detection] = None
+        self._other_dots: List[Detection] = []       # weaker spots in the same frame
         self.render_fps = 0.0
         self.mouse = self._setup_mouse() if args.mouse else None
 
         if self.mode == MODE_PICK:
             pass
         elif self.calibration is None:
-            self.notify("No calibration found - press C to calibrate")
+            self.notify("Калібрування не знайдено — натисни K або C, щоб відкалібрувати")
         else:
-            self.notify(f"Calibration loaded (error {self.calibration.error:.1f} px)")
+            self.notify(f"Калібрування завантажено (похибка {self.calibration.error:.1f} пкс)")
 
     def _load_settings(self) -> dict:
         try:
@@ -207,7 +210,7 @@ class LaserApp:
         """Cycle to the next capture device without restarting."""
         cams = list_cameras()
         if len(cams) < 2:
-            self.notify("only one camera available")
+            self.notify("доступна лише одна камера")
             return
         order = [c.index for c in cams]
         pos = (order.index(self.camera_index) + 1) % len(order) \
@@ -217,13 +220,13 @@ class LaserApp:
     def _select_camera(self, cam: CameraInfo) -> None:
         """Switch to `cam` for good and remember it for next time."""
         if not self._use_camera(cam):
-            self.notify(f"cannot open camera [{cam.index}] {cam.name}", 4.0)
+            self.notify(f"не вдається відкрити камеру [{cam.index}] {cam.name}", 4.0)
             return
         self.settings["camera"] = cam.name
         self._save_settings()
-        msg = f"camera -> [{cam.index}] {cam.name}"
+        msg = f"камера -> [{cam.index}] {cam.name}"
         if self.calibration and tuple(self.camera_size) != tuple(self.calibration.camera_size):
-            msg += "  - calibration is for another camera, press K"
+            msg += "  — калібрування зроблене для іншої камери, натисни K"
         self.notify(msg, 4.0)
 
     # -- camera picker ------------------------------------------------------
@@ -254,7 +257,7 @@ class LaserApp:
         cam = self.picker_cams[self.picker_sel]
         self.picker_msg = ""
         if not self._use_camera(cam):
-            self.picker_msg = f"cannot open {cam.name} - is another program using it?"
+            self.picker_msg = f"не вдається відкрити {cam.name} — можливо, її вже використовує інша програма?"
 
     def picker_move(self, sel: int) -> None:
         if not self.picker_cams:
@@ -266,7 +269,7 @@ class LaserApp:
 
     def picker_confirm(self) -> None:
         if not self.picker_cams or self.camera is None:
-            self.picker_msg = self.picker_msg or "no working camera selected"
+            self.picker_msg = self.picker_msg or "не вибрано жодної робочої камери"
             return
         cam = self.picker_cams[self.picker_sel]
         self.mode = self._picker_return
@@ -303,7 +306,7 @@ class LaserApp:
         elif key == 27 and not self._picker_initial:   # ESC: back to the old camera
             original = self._picker_original
             if original is None or not self._use_camera(original):
-                self.picker_msg = "no camera open - choose one"
+                self.picker_msg = "жодна камера не відкрита — обери камеру"
                 return True
             self.mode = self._picker_return
         elif ch == "q":
@@ -333,6 +336,15 @@ class LaserApp:
         if self.mouse_input:
             return self._mouse_pos if self._mouse_down else None
         return self.map_to_screen(self.detection) if self.detection else None
+
+    def pointers(self) -> List[Tuple[float, float]]:
+        """Every dot on the screen, strongest first, for a game with two
+        players. The mouse is one pointer, wherever it is."""
+        if self.mouse_input or self.detection is None:
+            point = self.pointer()
+            return [point] if point is not None else []
+        points = [self.map_to_screen(d) for d in [self.detection] + self._other_dots]
+        return [p for p in points if p is not None]
 
     def _on_mouse(self, event, x, y, flags, param) -> None:
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -414,13 +426,24 @@ class LaserApp:
                     # its first frame, and one that has stalled is being
                     # reopened; keep drawing so the screen never freezes.
                     self.detection = None
-                    doing = "reconnecting" if self.camera.stalled else "starting"
                     canvas = overlay.blank(self.screen_size)
-                    overlay.draw_panel(canvas, [
-                        (f"{doing} camera [{self.camera_index}] {self.camera_name}",
-                         0.9, overlay.CYAN, 2),
-                        ("V choose camera    N next camera    Q quit", 0.6, overlay.GREY, 1),
-                    ], self.screen_size[1] / 2)
+                    if self.camera.lost > 2.0:
+                        # Not coming back by itself: say what to do about it.
+                        lines = [
+                            ("Камеру від'єднано", 1.3, overlay.YELLOW, 3),
+                            (self.camera_name, 0.9, overlay.WHITE, 2),
+                            ("під'єднай її знову — програма підхопить її сама", 0.75, overlay.WHITE, 1),
+                            ("або натисни V і вибери іншу камеру", 0.75, overlay.WHITE, 1),
+                            ("V — вибір камери    N — наступна камера    Q — вихід", 0.6, overlay.GREY, 1),
+                        ]
+                    else:
+                        doing = "перепідключаю" if self.camera.stalled else "запускаю"
+                        lines = [
+                            (f"{doing} камеру [{self.camera_index}] {self.camera_name}",
+                             0.9, overlay.CYAN, 2),
+                            ("V — вибір камери    N — наступна камера    Q — вихід", 0.6, overlay.GREY, 1),
+                        ]
+                    overlay.draw_panel(canvas, lines, self.screen_size[1] / 2)
                     cv2.imshow(WINDOW, canvas)
                     key = cv2.waitKey(30) & 0xFF
                     if key != 255 and not self.handle_key(key):
@@ -429,7 +452,9 @@ class LaserApp:
 
                 if seq != self.frame_seq:
                     self.frame_seq = seq
-                    self.detection = self.detector.detect(frame, self._roi(frame))
+                    found = self.detector.detect_all(frame, self._roi(frame))
+                    self.detection = found[0] if found else None
+                    self._other_dots = found[1:]
                 elif self.camera.age > STALE:
                     # The camera is dropping frames: better no pointer than
                     # one left standing where the laser last was.
@@ -472,6 +497,7 @@ class LaserApp:
                 if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                     break
         finally:
+            self._close_game()
             if self.camera is not None:
                 self.camera.release()
             cv2.destroyAllWindows()
@@ -479,12 +505,12 @@ class LaserApp:
     # -- games --------------------------------------------------------------
     def open_menu(self) -> None:
         if self.calibration is None and not self.mouse_input:
-            self.notify("calibrate first - press K", 4.0)
+            self.notify("спершу відкалібруй — натисни K", 4.0)
             return
         if self.mode not in (MODE_GAME, MODE_MENU):
             self._preview_before_game = self.preview
             self.preview = 0            # tiles and targets need the whole screen
-        self.game = None
+        self._close_game()
         self.menu = GameMenu(self.screen_size)
         self.mode = MODE_MENU
         self.show_help = False
@@ -513,18 +539,27 @@ class LaserApp:
             return
         self._game_factory = factory
         self.menu = None
+        self._close_game()
         self.game = factory(self.screen_size)
+        self.game.home = self.calib_path.parent
         self.game.start(time.time())
         self._game_rank = None
+        self._naming: Optional[NameEntry] = None  # typing a name for a new high score
+        self._end: Optional[EndButtons] = None   # PLAY AGAIN / OTHER GAMES, once it is over
         self._blind_pause = False
         self.mode = MODE_GAME
         self.show_help = False
         self.trail.clear()
         self.smoothed = None
 
+    def _close_game(self) -> None:
+        if self.game is not None:
+            self.game.close()
+        self.game = None
+
     def end_game(self) -> None:
         self.mode = MODE_TRACK
-        self.game = None
+        self._close_game()
         self.menu = None
         self.preview = self._preview_before_game
         self.smoothed = None
@@ -547,7 +582,7 @@ class LaserApp:
         # With no picture the laser cannot be seen, and a round left running
         # would cost lives for targets nobody could have shot. The mouse
         # pointer does not need the camera.
-        blind = self.camera.age > STALE and not self.mouse_input
+        blind = self.camera.age > STALE and not self.mouse_input and game.needs_sight
         if blind and game.state == "playing":
             game.toggle_pause(t)
             self._blind_pause = True
@@ -555,19 +590,59 @@ class LaserApp:
             if game.state == "paused":
                 game.toggle_pause(t)
             self._blind_pause = False
-        game.update(t, point)
+        points = [point] if point is not None else []
+        if game.players > 1:
+            points = self.pointers()
+            game.update(t, point, points)
+        else:
+            game.update(t, point)
 
         scores = self._scores_for(game)
         if game.state == "over" and self._game_rank is None:
-            self._game_rank = (scores.add(game.stats, time.strftime("%d %b %H:%M"))
+            self._game_rank = (scores.add(game.stats, names.today())
                                if scores is not None else None) or 0
+            if self._game_rank:
+                self._naming = NameEntry(self.screen_size, t,
+                                         f"НОВИЙ РЕКОРД — №{self._game_rank}",
+                                         self.settings.get("player", ""))
 
+        if getattr(game, "done", False):         # the teacher's settings, saved
+            self.open_menu()
+            return
         game.draw(canvas)
         if game.state == "over":
             game.draw_over(canvas, scores, self._game_rank or None)
-        elif point is not None:
-            overlay.draw_target(canvas, point[0], point[1], t, 1.0,
-                                crosshair=self.show_crosshair)
+            if self._naming is not None:
+                name = self._naming.update(t, points)
+                self._naming.draw(canvas)
+                for x, y in points:
+                    overlay.draw_glow(canvas, x, y, overlay.YELLOW, self.screen_size[1] / 1080.0, t)
+                if name is not None:
+                    self._naming = None
+                    if name and scores is not None:
+                        scores.set_name(self._game_rank, name)
+                        self.settings["player"] = name
+                        self._save_settings()
+                return
+            # Play again, or choose another game, with the laser. A game with
+            # a button of its own (the duels' REMATCH) has no need of these.
+            if not getattr(game, "own_buttons", False):
+                if self._end is None:
+                    self._end = EndButtons(self.screen_size, t)
+                picked = self._end.update(t, points)
+                self._end.draw(canvas)
+                for x, y in points:
+                    game.draw_pointer(canvas, x, y, t)
+                if picked == AGAIN:
+                    self.start_game()
+                elif picked is not None:
+                    self.open_menu()
+        else:
+            # Crosshair lines run right across the screen - through the other
+            # player's half, when there is one.
+            for x, y in points:
+                game.draw_pointer(canvas, x, y, t,
+                                  crosshair=self.show_crosshair and game.players == 1)
 
     # -- tracking -----------------------------------------------------------
     def step_tracking(self, canvas) -> None:
@@ -591,7 +666,7 @@ class LaserApp:
 
         if t < self.verify_until and self.calibration and self.calibration.points:
             overlay.draw_done_markers(canvas, self.calibration.points, overlay.GREEN)
-            overlay.text(canvas, "Check the markers line up with your laser",
+            overlay.text(canvas, "Перевір, чи збігаються мітки з точкою лазера",
                          (40, self.screen_size[1] - 80), 0.7, overlay.GREEN)
 
         if self.smoothed is not None:
@@ -648,7 +723,7 @@ class LaserApp:
         # This caption is drawn identically in every frame, including the ones
         # the reference is built from, so it cancels out of the difference and
         # cannot be mistaken for the dot.
-        overlay.text_centered(canvas, "calibrating - keep the camera and screen still",
+        overlay.text_centered(canvas, "калібрування — не рухай камеру й екран",
                               self.screen_size[1] - 40, 0.6, overlay.GREY)
 
         if not session.done:
@@ -660,7 +735,7 @@ class LaserApp:
             self.notify(session.message, 7.0)
             self.verify_until = time.time() + 6.0
         else:
-            self.notify(session.message + " - press K to retry, or C for the laser", 8.0)
+            self.notify(session.message + " — K: спробувати ще раз, C: калібрувати лазером", 8.0)
         self.auto = None
         self.mode = MODE_TRACK
 
@@ -689,7 +764,7 @@ class LaserApp:
             if s.result is not None:
                 self.calibration = s.result
                 self.calibration.save(self.calib_path, self.detector.s)
-                self.notify(f"{s.message} - saved to {self.calib_path}", 5.0)
+                self.notify(f"{s.message} — збережено в {self.calib_path}", 5.0)
                 self.verify_until = t + 6.0
             else:
                 self.notify(s.message, 5.0)
@@ -702,20 +777,20 @@ class LaserApp:
         overlay.draw_marker(canvas, tx, ty, s.progress, t)
 
         if self.detection is None:
-            hint = ("laser not detected - press D for the detector view, "
-                    "[ ] , . to adjust, E/R for exposure", 0.7, overlay.YELLOW, 1)
+            hint = ("лазер не видно — D: вигляд детектора, "
+                    "[ ] , . : налаштування, E/R: експозиція", 0.7, overlay.YELLOW, 1)
         elif t < s.cooldown_until:
-            hint = ("hold on...", 0.7, overlay.GREY, 1)
+            hint = ("зачекай...", 0.7, overlay.GREY, 1)
         elif s.unmoved:
-            hint = ("captured - now move the laser to this marker", 0.7, overlay.YELLOW, 1)
+            hint = ("є! тепер переведи лазер на цю мітку", 0.7, overlay.YELLOW, 1)
         else:
-            hint = (f"holding {int(s.progress * 100)}%", 0.7, overlay.GREEN, 1)
+            hint = (f"утримання {int(s.progress * 100)}%", 0.7, overlay.GREEN, 1)
 
         overlay.draw_panel(canvas, [
-            (f"CALIBRATION   {s.index + 1} / {len(s.targets)}", 1.0, overlay.CYAN, 2),
-            ("Point the laser at the centre of the marker and hold it steady",
+            (f"КАЛІБРУВАННЯ   {s.index + 1} / {len(s.targets)}", 1.0, overlay.CYAN, 2),
+            ("Наведи лазер на центр мітки й тримай рівно",
              0.7, overlay.WHITE, 1),
-            ("SPACE capture now    B back    ESC cancel", 0.6, overlay.GREY, 1),
+            ("SPACE — зафіксувати    B — назад    ESC — скасувати", 0.6, overlay.GREY, 1),
             hint,
         ], self._panel_row(ty))
 
@@ -737,29 +812,29 @@ class LaserApp:
         d = self.detector.s
         bits = [
             f"[{self.camera_index}] {self.camera_name}",
-            f"{self.camera_size[0]}x{self.camera_size[1]} @ {self.camera.fps:4.1f}fps",
-            f"render {self.render_fps:4.1f}fps",
-            f"sens {d.sensitivity:.1f} floor {d.min_redness} thr {self.detector.threshold:.0f}",
-            f"blobs {self.detector.candidates}",
-            "LASER" if self.detection else "no laser",
+            f"{self.camera_size[0]}x{self.camera_size[1]} @ {self.camera.fps:4.1f} к/с",
+            f"екран {self.render_fps:4.1f} к/с",
+            f"чутл. {d.sensitivity:.1f} мін. {d.min_redness} поріг {self.detector.threshold:.0f}",
+            f"плям {self.detector.candidates}",
+            "ЛАЗЕР" if self.detection else "лазера немає",
         ]
         if self.calibration:
-            bits.append(f"calib err {self.calibration.error:.1f}px")
+            bits.append(f"похибка {self.calibration.error:.1f} пкс")
             if self.calibration.lens:
-                bits.append(f"lens k1={self.calibration.lens.k1:+.2f}")
+                bits.append(f"об'єктив k1={self.calibration.lens.k1:+.2f}")
         else:
-            bits.append("UNCALIBRATED")
+            bits.append("НЕ ВІДКАЛІБРОВАНО")
         if self.camera.auto_exposure:
-            bits.append("auto-exp")
+            bits.append("автоекспозиція")
         else:
-            bits.append(f"exp {self.camera.exposure:.0f}")
+            bits.append(f"експозиція {self.camera.exposure:.0f}")
         overlay.text(canvas, "   ".join(bits), (20, h - 20), 0.55,
                      overlay.GREEN if self.detection else overlay.GREY)
 
         if self.camera.loss > 0.05:
             overlay.text(canvas,
-                         f"the camera is losing {self.camera.loss * 100:.0f}% of its frames - "
-                         "check its cable, or plug it straight into the computer",
+                         f"камера губить {self.camera.loss * 100:.0f}% кадрів — "
+                         "перевір кабель або під'єднай камеру безпосередньо до комп'ютера",
                          (20, h - 72), 0.6, overlay.YELLOW)
 
         # Redness is what the detector runs on, and a blown-out sensor has
@@ -767,8 +842,8 @@ class LaserApp:
         if (self.detection is None and self.detector.saturation > 0.02
                 and self.mode == MODE_TRACK):
             overlay.text(canvas,
-                         f"{self.detector.saturation * 100:.0f}% of the image is blown out - "
-                         "press E to darken the exposure",
+                         f"{self.detector.saturation * 100:.0f}% зображення пересвічено — "
+                         "натисни E, щоб зменшити експозицію",
                          (20, h - 46), 0.6, overlay.YELLOW)
 
         if t < self.status_until:
@@ -793,7 +868,7 @@ class LaserApp:
                 if self.calibration else None
             label = f"[{self.camera_index}] {self.camera_name}"
             if lens:
-                label += "  lens-corrected" if corrected else "  raw (bowed)"
+                label += "  з корекцією об'єктива" if corrected else "  без корекції (вигнуте)"
             overlay.draw_preview(canvas, frame, self.detector.mask, point, quad,
                                  mode=mode, camera_label=label, maps=maps)
 
@@ -804,7 +879,7 @@ class LaserApp:
 
     def auto_tune(self) -> None:
         """Sample ~0.5s of video and lift the thresholds above the background."""
-        self.notify("auto-tuning - point the laser away from the screen", 1.0)
+        self.notify("автоналаштування — відведи лазер від екрана", 1.0)
         frames = []
         seen = self.frame_seq
         deadline = time.time() + 1.0
@@ -814,15 +889,19 @@ class LaserApp:
                 seen = seq
                 frames.append(frame.copy())
         if not frames:
-            self.notify("auto-tune failed - no frames")
+            self.notify("автоналаштування не вдалося — немає кадрів")
             return
         floor, sens = self.detector.auto_threshold(frames)
-        self.notify(f"auto-tuned: ignoring anything below {floor} local redness", 3.0)
+        self.notify(f"налаштовано: усе, що менш червоне за {floor}, тепер не зважається", 3.0)
 
     # -- input --------------------------------------------------------------
     def handle_key(self, key: int) -> bool:
         ch = chr(key) if 32 <= key < 127 else ""
         low = ch.lower()
+        # Typing a name, every key is a letter - even Q.
+        if self.mode == MODE_GAME and getattr(self, "_naming", None) is not None \
+                and self._naming.key(key):
+            return True
 
         if key == 27:  # ESC
             if self.mode == MODE_MENU:
@@ -830,17 +909,20 @@ class LaserApp:
                     self.end_game()
                 return True
             if self.mode == MODE_GAME:
-                self.end_game()
+                if getattr(self.game, "back_to_menu", False) and self._naming is None:
+                    self.open_menu()
+                else:
+                    self.end_game()
                 return True
             if self.mode == MODE_AUTO:
                 self.mode = MODE_TRACK
                 self.auto = None
-                self.notify("automatic calibration skipped - press K to retry")
+                self.notify("автокалібрування пропущено — натисни K, щоб спробувати ще раз")
                 return True
             if self.mode == MODE_CALIB:
                 self.mode = MODE_TRACK
                 self.session = None
-                self.notify("Calibration cancelled")
+                self.notify("Калібрування скасовано")
                 return True
             return False
         if low == "q":
@@ -849,9 +931,9 @@ class LaserApp:
         if self.mode == MODE_CALIB and self.session is not None:
             if key == 32:  # SPACE
                 if self.session.force_capture(self.detection):
-                    self.notify("point captured", 1.0)
+                    self.notify("точку зафіксовано", 1.0)
                 else:
-                    self.notify("no laser visible", 1.0)
+                    self.notify("лазера не видно", 1.0)
                 if self.session and self.session.done:
                     return True
             elif low == "b":
@@ -867,6 +949,9 @@ class LaserApp:
                     self.start_game(choice)
             elif low == "m":
                 self.mouse_input = not self.mouse_input
+            return True
+
+        if self.mode == MODE_GAME and self.game is not None and self.game.key(key):
             return True
 
         if low == "g":
@@ -886,22 +971,22 @@ class LaserApp:
             self.auto_tune()
         elif low == "d":
             self.preview = (self.preview + 1) % 3
-            self.notify(("preview off", "preview: camera + mask", "preview: camera")[self.preview], 1.5)
+            self.notify(("перегляд вимкнено", "перегляд: камера + маска", "перегляд: камера")[self.preview], 1.5)
         elif low == "n":
             self.switch_camera()
         elif low == "v":
             self.open_picker()
         elif low == "m":
             self.mouse_input = not self.mouse_input
-            self.notify("pointer: mouse (hold the left button)" if self.mouse_input
-                        else "pointer: laser", 2.5)
+            self.notify("вказівник: миша (тримай ліву кнопку)" if self.mouse_input
+                        else "вказівник: лазер", 2.5)
         elif low == "u":
             self.correct_preview = not self.correct_preview
             if self.calibration and self.calibration.lens:
-                self.notify("preview: lens-corrected" if self.correct_preview
-                            else "preview: raw camera image", 1.5)
+                self.notify("перегляд: з корекцією об'єктива" if self.correct_preview
+                            else "перегляд: необроблений кадр камери", 1.5)
             else:
-                self.notify("no lens correction yet - calibrate first", 2.0)
+                self.notify("корекції об'єктива ще немає — спершу відкалібруй", 2.0)
         elif low == "t":
             self.show_trail = not self.show_trail
             self.trail.clear()
@@ -919,18 +1004,18 @@ class LaserApp:
         elif ch == ".":
             self.detector.adjust(redness=+5)
         elif low == "e":
-            self.notify(f"exposure {self.camera.nudge_exposure(0.7):.0f}", 1.5)
+            self.notify(f"експозиція {self.camera.nudge_exposure(0.7):.0f}", 1.5)
         elif low == "r":
-            self.notify(f"exposure {self.camera.nudge_exposure(1.4):.0f}", 1.5)
+            self.notify(f"експозиція {self.camera.nudge_exposure(1.4):.0f}", 1.5)
         elif low == "a":
             self.camera.set_auto_exposure(not self.camera.auto_exposure)
-            self.notify(f"auto exposure {'on' if self.camera.auto_exposure else 'off'}", 1.5)
+            self.notify(f"автоекспозицію {'увімкнено' if self.camera.auto_exposure else 'вимкнено'}", 1.5)
         elif low == "s":
             if self.calibration:
                 self.calibration.save(self.calib_path, self.detector.s)
-                self.notify(f"saved {self.calib_path}")
+                self.notify(f"збережено {self.calib_path}")
             else:
-                self.notify("nothing to save - calibrate first")
+                self.notify("нічого зберігати — спершу відкалібруй")
         return True
 
 
@@ -972,6 +1057,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--mouse-pointer", action="store_true",
                    help="use the mouse as the pointer (hold the left button) - "
                         "handy for trying the game without a laser")
+    p.add_argument("--no-sound", action="store_true",
+                   help="no voices, music or sound effects")
     p.add_argument("--mouse", action="store_true",
                    help="also move the real mouse cursor (needs pyautogui)")
     return p.parse_args(argv)

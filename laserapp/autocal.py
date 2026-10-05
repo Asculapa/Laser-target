@@ -101,7 +101,7 @@ class AutoCalibration:
         self._started = time.time()
         self._seen_seq = -1
         self.result: Optional[Calibration] = None
-        self.message = "preparing..."
+        self.message = "підготовка..."
 
     # -- state --------------------------------------------------------------
     @property
@@ -137,7 +137,7 @@ class AutoCalibration:
                 self._ref_frames.clear()
                 self.state = self.POINTS
                 self._started = now
-                self.message = "finding the screen"
+                self.message = "шукаю екран"
             return
 
         if now - self._started < self.dwell:
@@ -191,19 +191,19 @@ class AutoCalibration:
     def _finish(self) -> None:
         self.state = self.FINISHED
         if len(self.kept) < MIN_POINTS:
-            self.message = (f"only {len(self.kept)} of {len(self.targets)} points were seen - "
-                            "check the camera can see the whole screen")
+            self.message = (f"камера побачила лише {len(self.kept)} з {len(self.targets)} точок — "
+                            "перевір, чи видно їй увесь екран")
             return
         try:
             self.result = solve(self.samples, self.kept, self.camera_size,
                                 self.screen_size, lens=self.lens)
         except RuntimeError as exc:
-            self.message = f"calibration failed: {exc}"
+            self.message = f"калібрування не вдалося: {exc}"
             return
         r = self.result
-        self.message = f"Calibrated from the screen - {r.error:.1f} px from {len(self.kept)} points"
+        self.message = f"Відкалібровано за екраном — похибка {r.error:.1f} пкс, точок: {len(self.kept)}"
         if r.lens is not None:
-            self.message += (f" (lens k1={r.lens.k1:+.2f}; "
-                             f"{r.error_no_lens:.1f} px uncorrected)")
+            self.message += (f" (об'єктив k1={r.lens.k1:+.2f}; "
+                             f"без корекції {r.error_no_lens:.1f} пкс)")
         if self.skipped:
-            self.message += f", {self.skipped} not seen"
+            self.message += f", не побачено: {self.skipped}"

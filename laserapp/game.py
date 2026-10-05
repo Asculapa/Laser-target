@@ -19,7 +19,7 @@ import math
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -107,7 +107,7 @@ class HighScores:
         self.limit = limit
         self.entries: List[dict] = []
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, list):
                 self.entries = [e for e in data if isinstance(e, dict)][:limit]
         except Exception:
@@ -130,11 +130,69 @@ class HighScores:
         })
         self.entries.sort(key=lambda e: e.get("score", 0), reverse=True)
         del self.entries[self.limit:]
+        self._save()
+        return rank
+
+    def set_name(self, rank: int, name: str) -> None:
+        """Put a name to the score at `rank`, once the player has typed it."""
+        if name and 0 < rank <= len(self.entries):
+            self.entries[rank - 1]["name"] = name
+            self._save()
+
+    @staticmethod
+    def who(entry: dict) -> str:
+        """The name on a row of the table, if it has one, with room after it."""
+        name = entry.get("name", "")
+        return f"{name}   " if name else ""
+
+    def _save(self) -> None:
         try:
-            self.path.write_text(json.dumps(self.entries, indent=2))
+            self.path.write_text(json.dumps(self.entries, indent=2, ensure_ascii=False),
+                                 encoding="utf-8")
         except Exception:
             pass
-        return rank
+
+
+Box = Tuple[int, int, int, int]
+
+
+class Hold:
+    """Buttons pressed by resting the pointer on one, as in the game chooser."""
+
+    DWELL = 0.9
+    GRACE = 0.35             # the hold survives losing the dot for this long
+
+    def __init__(self) -> None:
+        self.over: Optional[int] = None
+        self.dwell = 0.0
+        self._away = 0.0
+
+    def reset(self) -> None:
+        self.over, self.dwell, self._away = None, 0.0, 0.0
+
+    def update(self, dt: float, point: Optional[Tuple[float, float]],
+               boxes: Sequence[Box]) -> Optional[int]:
+        """The button whose hold has just completed, if any."""
+        at = None
+        if point is not None:
+            at = next((i for i, (x0, y0, x1, y1) in enumerate(boxes)
+                       if x0 <= point[0] <= x1 and y0 <= point[1] <= y1), None)
+        if at is None:
+            self._away += dt
+            if self._away > self.GRACE:
+                self.reset()
+            return None
+        if at != self.over:
+            self.over, self.dwell = at, 0.0
+        self._away = 0.0
+        self.dwell += dt
+        if self.dwell >= self.DWELL:
+            self.reset()
+            return at
+        return None
+
+    def fill(self, i: int) -> float:
+        return min(1.0, self.dwell / self.DWELL) if i == self.over else 0.0
 
 
 class Round:
@@ -147,8 +205,8 @@ class Round:
     FLASH_GAP = 0.3          # the dot gone this long means the beam is off; less
                              # is the detector missing frames, and changes nothing
     SHOT_VISIBLE = 0.7
-    HINT = "point the laser at the targets"
-    PAUSE_TEXT = ("PAUSED", "P to resume    ESC to quit")
+    HINT = "наводь лазер на мішені"
+    PAUSE_TEXT = ("ПАУЗА", "P — продовжити    ESC — вийти")
     scores_name: Optional[str] = None    # high-score file stem; None = no table
     needs_sight = True                   # False while a game has no use for the
                                          # pointer, and need not stop without it
@@ -304,6 +362,20 @@ class Round:
             self.shots.clear()
 
     # -- drawing ------------------------------------------------------------
+    def draw_pointer(self, canvas, x: float, y: float, t: float,
+                     crosshair: bool = False) -> None:
+        """Where a laser is pointing. A game with a look of its own draws its own."""
+        overlay.draw_target(canvas, x, y, t, 1.0, crosshair=crosshair)
+
+    KICK = 0.2               # seconds a pointer shows that a shot went off
+
+    def _kick(self, shots: Optional[List[Shot]] = None) -> float:
+        """1 just as the newest shot went off, falling to 0 over KICK."""
+        shots = self.shots if shots is None else shots
+        if not shots:
+            return 0.0
+        return max(0.0, 1.0 - (self.now - max(s.at for s in shots)) / self.KICK)
+
     def draw(self, canvas) -> None:
         now = self.now
         for t in self.targets:
@@ -498,11 +570,20 @@ class Game(Round):
         if self.combo > 1:
             label += f"  x{self.multiplier:.1f}"
         if how == "flash":
-            label += "  SNAP"
+            label += "  МИТТЮ"
         self.shots.append(Shot(target.x, target.y, now, points, label, True))
 
     def _decoy_text(self, target: Target) -> str:
-        return "DECOY -25"
+        return "ПАСТКА -25"
+
+    def review(self) -> list:
+        """Lines for the end panel about what went wrong; the gallery has none."""
+        return []
+
+    def draw_pointer(self, canvas, x: float, y: float, t: float,
+                     crosshair: bool = False) -> None:
+        overlay.draw_scope(canvas, x, y, overlay.CYAN, self.screen_size[1] / 1080.0,
+                           self._kick(), crosshair)
 
     def _escape(self, target: Target, now: float) -> None:
         """A target ran out of time unshot."""
@@ -514,7 +595,7 @@ class Game(Round):
     def _miss(self, x: float, y: float, now: float) -> None:
         self.combo = 0
         self.stats.misses += 1
-        self.shots.append(Shot(x, y, now, 0, "miss", False))
+        self.shots.append(Shot(x, y, now, 0, "мимо", False))
 
     # -- main update --------------------------------------------------------
     def _step(self, now: float, dt: float, point: Optional[Tuple[float, float]]) -> None:
@@ -569,9 +650,9 @@ class Game(Round):
 
     def _draw_hud(self, canvas) -> None:
         w = self.screen_size[0]
-        overlay.text(canvas, f"SCORE {self.stats.score}", (40, 60), 1.1, overlay.CYAN, 2)
+        overlay.text(canvas, f"РАХУНОК {self.stats.score}", (40, 60), 1.1, overlay.CYAN, 2)
         if self.combo > 1:
-            overlay.text(canvas, f"x{self.multiplier:.1f}  ({self.combo} in a row)",
+            overlay.text(canvas, f"x{self.multiplier:.1f}  ({self.combo} поспіль)",
                          (40, 100), 0.7, overlay.GREEN)
 
         left = self.time_left
@@ -581,7 +662,7 @@ class Game(Round):
         fill = int(bar_w * (left / self.duration if self.duration else 0))
         colour = overlay.CYAN if left > 10 else overlay.YELLOW
         cv2.rectangle(canvas, (x0, 34), (x0 + fill, 52), colour, -1)
-        overlay.text_centered(canvas, f"{left:4.1f}s   level {self.level}", 84, 0.7, colour)
+        overlay.text_centered(canvas, f"{left:4.1f} с   рівень {self.level}", 84, 0.7, colour)
 
         for i in range(self.lives_max):
             cx = w - 60 - i * 44
@@ -591,26 +672,27 @@ class Game(Round):
     def draw_over(self, canvas, scores: Optional[HighScores], rank: Optional[int]) -> None:
         s = self.stats
         lines = [
-            ("GAME OVER" if self.lives <= 0 else "TIME", 1.8, overlay.CYAN, 3),
-            (f"score {s.score}", 1.3, overlay.WHITE, 2),
-            (f"{s.hits} hits   {s.misses} missed shots   {s.escaped} got away",
+            ("ГРУ ЗАКІНЧЕНО" if self.lives <= 0 else "ЧАС ВИЙШОВ", 1.8, overlay.CYAN, 3),
+            (f"рахунок {s.score}", 1.3, overlay.WHITE, 2),
+            (f"влучань: {s.hits}   промахів: {s.misses}   утекло мішеней: {s.escaped}",
              0.75, overlay.GREY, 1),
-            (f"accuracy {s.accuracy:.0%}   best streak {s.best_combo}   "
-             f"reaction {s.reaction:.2f}s", 0.75, overlay.GREY, 1),
+            (f"влучність {s.accuracy:.0%}   найдовша серія {s.best_combo}   "
+             f"реакція {s.reaction:.2f} с", 0.75, overlay.GREY, 1),
         ]
+        lines += self.review()
         if rank:
-            lines.append((f"NEW HIGH SCORE - #{rank}", 0.9, overlay.GREEN, 2))
-        lines.append(("G play again    ESC back to tracking", 0.7, overlay.YELLOW, 1))
+            lines.append((f"НОВИЙ РЕКОРД — №{rank}", 0.9, overlay.GREEN, 2))
+        lines.append(("G — грати ще    ESC — вихід", 0.7, overlay.YELLOW, 1))
         overlay.draw_panel(canvas, lines, self.screen_size[1] * 0.42)
 
         if scores is not None and scores.entries:
             y = int(self.screen_size[1] * 0.78)
-            overlay.text_centered(canvas, "BEST", y, 0.7, overlay.CYAN)
+            overlay.text_centered(canvas, "РЕКОРДИ", y, 0.7, overlay.CYAN)
             for i, e in enumerate(scores.entries):
                 y += 30
                 overlay.text_centered(
                     canvas,
-                    f"{i + 1}.  {e.get('score', 0):>6}   "
-                    f"{e.get('accuracy', 0):.0%} accurate   x{e.get('combo', 0)}   "
+                    f"{i + 1}.  {HighScores.who(e)}{e.get('score', 0):>6}   "
+                    f"влучність {e.get('accuracy', 0):.0%}   x{e.get('combo', 0)}   "
                     f"{e.get('date', '')}",
                     y, 0.6, overlay.WHITE if i + 1 == rank else overlay.GREY)

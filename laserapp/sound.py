@@ -8,6 +8,10 @@ Two channels: a *voice*, of which there is one at a time - saying a new line
 cuts the old one off - and *blips*, short effects that play over it. *Music*
 is a third, which starts again when it ends.
 
+Blips go through mixer.py where it can open a stream, so any number of them
+play at once (two players firing together are two shots) and without the
+delay of starting a program. Where it cannot, they are played like the rest.
+
 On Windows the voice and the blips share winsound, which plays one sound at
 a time, so music goes another way there - MCI, through ctypes - and a machine
 where that does not work has the voices and the effects without the music.
@@ -24,6 +28,8 @@ import time
 import wave
 from pathlib import Path
 from typing import Dict, List, Optional, Union
+
+from . import mixer
 
 enabled = True              # --no-sound, and the self-test, turn this off
 
@@ -58,7 +64,7 @@ def _mci(command: str) -> Optional[str]:
 
 
 class Player:
-    BLIP_GAP = 0.08         # two effects closer together than this are one
+    BLIP_GAP = 0.08         # without the mixer, two effects closer together than this are one
 
     def __init__(self, folder: Path) -> None:
         self.folder = folder
@@ -169,9 +175,13 @@ class Player:
                     pass
 
     def blip(self, name: str) -> None:
+        if not enabled or self.length(name) is None:
+            return
+        mix = mixer.get()
+        if mix is not None and mix.play(self.folder / f"{name}.wav"):
+            return
         now = time.monotonic()
-        if not enabled or now - self._last_blip < self.BLIP_GAP \
-                or self.length(name) is None:
+        if now - self._last_blip < self.BLIP_GAP:
             return
         # winsound has one channel: an effect would cut the speech short.
         if sys.platform == "win32" and now < _voice_until:

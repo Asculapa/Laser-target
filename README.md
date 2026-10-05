@@ -4,7 +4,9 @@ Points a webcam at your screen (or a projected copy of it), finds a red laser
 dot in the camera image, and draws an animated reticle on the screen exactly
 where the laser is. Includes [games](#games) - a shooting gallery, a
 silhouette range, two maths games for school classes, a voiced story in
-five chapters and a split-screen duel for two lasers - press **G**.
+five chapters, a split-screen duel for two lasers, two jar-shooting
+games for two players and a Wild West shoot-out in the manner of the arcade
+light-gun games - press **G**.
 
 Alignment comes from a **homography** solved during calibration: the screen is
 a plane, the camera sees it from some angle, so one 3x3 projective transform
@@ -160,20 +162,31 @@ fullscreen and windowed.
 
 ## Games
 
-Press **G** for the chooser. Hold the laser on a tile for a second to pick it,
-or press its number; games with levels then ask which one. **ESC** steps back.
+Press **G** for the chooser. The games are in two rows - **shooting games**
+on top, **learning games** under them - numbered in reading order. Hold the
+laser on a tile for a second to pick it, or press its number; a game with
+levels then opens a page of them (the Wild West's as a small table: a row for
+one player, a row for two). **ESC** steps back.
 
 | | | |
 | --- | --- | --- |
+| | **Shooting games** | |
 | **1** | Shooting Gallery | *targets*: they appear, you shoot them, the round lasts a minute |
 | | | *silhouette*: a man-shaped range target with numbered rings, ten aimed shots |
-| **2** | Balloon Math | grades 2-4: hold the laser on the balloon with the right answer |
-| **3** | Number Hunt | grades 5-9: shoot only the numbers that fit the rule |
-| **4** | Story | *The Last Light of Lantern Rock*: five chapters, five different games, told aloud - in English or Ukrainian |
-| **5** | Range Duel | grades 8-9, two players: a half of the screen each, shoot the armed figures, spare the rest |
+| **2** | Wild West | one or two players together, three levels: bandits in the windows of a Western town, six streets and six showdowns, High Noon for two |
+| **3** | Range Duel | grades 8-9, two players: a half of the screen each, shoot the armed figures, spare the rest |
+| **4** | Jar Shoot | two players, a half each. *jar range*: jars of three sizes, each with its own time to be shot. *quick draw*: wait for the jar, break yours first |
+| | **Learning games** | |
+| **5** | Balloon Math | grades 2-4: hold the laser on the balloon with the right answer |
+| **6** | Number Hunt | grades 5-9: shoot only the numbers that fit the rule |
+| **7** | Story | *The Last Light of Lantern Rock*: five chapters, five different games, told aloud - in English or Ukrainian |
 
 During a game, **G** starts the same game again, **P** pauses and **ESC** goes
-back to tracking.
+back to tracking. At the end of a game there is no need for the keyboard:
+hold a laser on **PLAY AGAIN** or **OTHER GAMES** in the bottom corners (the
+duels have their **REMATCH** button instead). The buttons wait a moment and a
+half before they listen, since the players are usually still shooting when a
+game ends.
 
 Both maths games show digits and symbols only, so they need no translating.
 
@@ -380,6 +393,210 @@ The figures are drawn by the program (`duel_art.py`) rather than loaded from
 photographs, for the reason given in
 [A note on the colours](#a-note-on-the-colours): a photograph of a person is
 full of red, and the camera would take it for the laser.
+
+### Jar Shoot (two players)
+
+Two games on the same split screen as the [Range Duel](#range-duel-grades-8-9-two-players):
+**player 1 has the left half, player 2 the right**, and a dot counts for the
+half it is in. The jars stand on three shelves in each half.
+
+#### Jar range
+
+Jars come up on the shelves - the same jars in both halves at the same
+moments - and each has **its own time to be shot**: what is in it drains away
+as that time runs out, and a jar that is nearly empty shakes. A jar left
+until it is empty is gone, and counts as got away.
+
+| Jar | Worth | Stays up |
+| --- | --- | --- |
+| big, blue | 10 | 1.9 s |
+| middle, green | 20 | 2.5 s |
+| small, cyan | 40 | 3.1 s |
+| gold, small and lime | 100 | 1.3 s - rare, and only after the first ten seconds |
+
+So a small jar is hard to hit but pays the most and waits the longest; a big
+one is easy, and gone the soonest. What a jar is worth is written on its
+label, and is doubled for a jar shot the moment it comes up (less the longer
+it is left). Every jar in a row adds 0.1 to the multiplier, up to **x2**; a
+flash that hits nothing, or a jar that gets away, ends the streak.
+
+A round is 60 seconds. Jars come quicker, get smaller and stay for less time
+as it goes on. At the end the higher score has the round, with each player's
+jars, misses, accuracy and reaction time; **REMATCH** works as in the duel,
+and the rounds won are counted.
+
+#### Quick draw
+
+Both halves wait - *wait...* - for between 1.5 and 4 seconds, never the same
+twice. Then a jar comes up in each half, in the same place, and the first to
+break theirs takes the point. The clock under each player's name runs while
+the jar is up, and stops when they hit it: both times are shown, to the
+thousandth of a second, as long as the second player hits within 0.8 s of the
+first.
+
+* **Too early**: a flash before the jar is up gives the point to the other
+  player. When both shoot too soon, nobody has it.
+* **Too slow**: a jar nobody breaks in 3 seconds is nobody's point.
+* **Dead heat**: both in the same frame - nobody's point either.
+
+Holding a lit beam still is not a shot, so a player may keep the beam on and
+wait - but a dwell takes 0.35 s, and a flash does not. The jars are big at
+first and get smaller as the match goes on. **First to five** has the match;
+the end panel shows each player's best and average time, and the matches won
+are counted until the game is left with **ESC**.
+
+**Sound.** The jar range has its own music - a bouncing two-step that a
+whistled tune joins after sixteen seconds and that goes up a tone for the last
+twelve - with breaking glass for a hit and a chime for a gold jar. The quick
+draw has no music, only a buzzer for *too early* and a bell for a point. All
+of it is synthesised by `tools/jars_audio.py` (numpy only) into
+`laserapp/assets/jars/`.
+
+### Wild West (one or two players, together)
+
+A shoot-out in the manner of the old arcade light-gun games. Bandits come up
+in the windows, doors and street of a Western town at night, gun in hand,
+and each one fires after a moment: **the ring closing on him is how long
+there is**, and it blinks when it is nearly gone. A bandit who fires costs a
+life - the screen jolts, *YOU'RE HIT!*. Townsfolk come up too, empty-handed:
+an old man with a sack, a gentleman in a hat, the butcher in his apron, a
+lady in a long dress. Shooting one costs a life as well. So the rule is the
+old one: **shoot the ones with a gun out**.
+
+The two sides are made to be told apart at a glance: the bandits are short,
+stocky cowboys with a big gun held out (one with a bandana over his face),
+the townsfolk tall, slender people drawn by another artist, and nobody
+appears on both sides. Behind a sill, a railing or a barrel, a bandit always
+stands high enough for his gun to show over it, and only a bandit has the
+ring.
+
+When a street's bandits are all down, their leader walks out for a
+**showdown**. A bell, then he waits - *wait for it...* - for two to four
+seconds, never the same; then *DRAW!* and there is a second or less to get
+him. Shooting before the shout, or too late, costs a life, and the showdown
+starts again. Six streets, six showdowns, and the town is safe - three to
+four minutes for a quick pair of hands, longer for most.
+
+Pick it in the chooser by players and level:
+
+| Level | Lives | Bandits' fuses | Six-shooter | A life back each street |
+| --- | --- | --- | --- | --- |
+| **Deputy** | 7 | longer, a bandit fewer up at once | never needs reloading | yes |
+| **Sheriff** | 5 | as in the table below, a little longer | 6 shots | yes |
+| **Marshal** | 4 | shorter, a bandit more up at once | 6 shots | no |
+
+Each street brings something new:
+
+| Street | | New |
+| --- | --- | --- |
+| 1 · Main Street | St. Elmo | bandits pop up - learn the rule |
+| 2 · The Store | a row of shops | **peekers**: they duck behind their cover and come up again, and can only be shot while up |
+| 3 · The Inn | Virginia City | **runners** cross the street, gun out: aim ahead of them |
+| 4 · The Boardwalk | | (two players) **team shots** - see below |
+| 5 · Hank's Hotel | Calico | all of it, quicker |
+| 6 · Calico | | all of it, quickest, the shortest draw |
+
+**The six-shooter.** Six shots, shown at the bottom corner; a miss costs a
+bullet, so spraying the town does not pay. To reload, shoot the **RELOAD bar**
+along the bottom of the screen. The game teaches it: the countdown and the
+first street's title say so, and the first time a gun runs dry the game says
+it in the middle of the screen - *OUT OF BULLETS! shoot the RELOAD bar*. From
+then on the bar does the telling: at two bullets left it shows *2 left*, and
+when a gun is empty that player's part of the bar lights up in their colour,
+with arrows bouncing down at it and *SHOOT HERE TO RELOAD*; an empty gun shot
+anyway says *EMPTY - RELOAD* where it was aimed. *RELOADED!* says it worked.
+With two players, each has their own half of the bar, but either half
+reloads the gun that shot it.
+
+**Something to shoot for.** Once or twice a street something floats over the
+town: a **gold coin** doubles the points for ten seconds, a **sheriff's
+star** gives a life back.
+
+**Points.** A bandit is worth 100, up to double for a quick shot, more for
+a small one - far down the street or at an upstairs window - and a quarter
+more for a peeker or a runner. Every hit in a row adds 0.1 to the multiplier.
+A showdown pays 500 to 1500, more the quicker the draw. At the end the town
+gives a rank - *Greenhorn, Trail Hand, Gunslinger, Town Hero*, or for a clean sweep
+with 80% accuracy and no townsfolk shot, *Legend of the West* - and the top
+five are kept for each level, in `highscores-west-1p-sheriff.json` and the
+like.
+
+#### Two players
+
+One town, one set of lives, **a score each**. The camera cannot tell two
+lasers apart, so the screen is shared out the way the duels share it:
+**player 1 has the left, player 2 the right**, and a laser belongs to the
+player on whose side it comes on - and stays theirs **for as long as the beam
+stays lit**. That one rule makes the rest work:
+
+* **Cover your partner.** To help, keep your beam on and slide it across: a
+  bandit brought down on your partner's side is a **SAVED!**, 50 points more
+  and counted at the end. (A quick flash over there counts as theirs.)
+* **Crossfire.** Hits taken in turn, one player then the other within a
+  second and a half, add to the multiplier - up to x3 together with the
+  streak.
+* **Team shots** (from street 4). A big bandit stands on the middle line,
+  with a ring in both players' colours. A shot from one alone only clangs -
+  *TOGETHER!* - he goes down to a shot from each, within 0.6 s.
+* **Two bosses.** Every showdown is a boss each, drawing at the same moment;
+  the street is only won when both are down.
+* **High Noon.** After streets 2 and 4 the two meet: a bottle on a post on
+  each side, the bell, *DRAW!* - first to break their own bottle takes the
+  round, first to two rounds wins the match and 500 points. Shooting before
+  the shout gives the round away. Nobody gets hurt: it is bottles, not each
+  other.
+* **Before it starts**, each player holds their laser on **NORMAL** or
+  **EASIER** on their own side. *Easier* gives the bandits on that side
+  longer fuses and a bigger area to hit - so an older and a younger student
+  can play together fairly. **SPACE** starts with both as they are.
+* **If a laser goes quiet** - nobody on one side for 25 seconds - the game
+  waits: *WAITING FOR PLAYER 2*. It goes on as soon as that laser is back, or
+  **C** carries on without.
+* **At the end** each player's score, hits, accuracy, saves, townsfolk shot
+  and quickest draw, the higher score marked **TOP GUN**, and one or two
+  awards each, so both go home with something: *Sharpshooter, Quickest
+  Draw, Guardian Angel* (most saves), *High Noon, Steady Hand* (no townsfolk
+  shot), *Trigger-Happy* (most missed shots) - or *True Grit*.
+
+**The pictures** are not drawn by the program, unlike the rest of the app's:
+they are CC0 (public domain) art from [OpenGameArt.org](https://opengameart.org) -
+pixel-art bandits by software_atelier, townsfolk from Luis Zuno's
+*Gothicvania Town*, and photographs
+of real Old West towns from Technopeasant's *Old West Backdrops* (themselves
+from Wikimedia Commons). `laserapp/assets/west/CREDITS.md` says whose each
+file is, and `tools/west_assets.py` fetches them again. As published they are
+full of brown, skin and red bandanas, which the camera would take for the
+laser, and a sunlit town is too bright to find a dot on, so they are
+recoloured as they load (`west_art.py`): the photographs become the town by
+moonlight - grey, blue and dim - and every hue of the sprites is moved to
+where red is under green (red to deep blue, brown to steel blue, yellow to
+lime), with nothing let get bright and a pale rim round each figure so it
+stands out in the dark. The colours are also kept faint - more grey than
+colour. The detector finds the dot by how much redder it is than green and
+blue, and on a pixel strong in blue or green a laser has nothing left to
+show: with the sprites' colours at full strength, a moderate dot on the lady
+or the butcher was missed one time in three. Faint, it is found on every
+character every time (the self-test checks it), and the shapes - stocky
+cowboys with guns against tall townsfolk - still tell the two sides apart. The self-test checks that none of it is red; measured
+with a simulated laser spot, the dot is found on every character.
+
+An open-source Western shooter, *Far West 1789*, was looked at too and not
+used: it is GPL, but its pictures are taken from elsewhere - comic
+characters, stock photographs, film stills - and are not its to give.
+
+**Sound.** A gunshot for every shot - with a thud for a hit and a ricochet for
+a miss - a deeper one with an echo for a bandit's, a bell and a whistle for
+the showdown. The music changes every two streets - three pieces, each with
+its own tune, key, rhythm and band, and each livelier and louder than the last:
+
+| Streets | Music |
+| --- | --- |
+| 1-2 · Main Street, The Store | *The Lonesome Trail* - a slow ballad in three, in D: a harmonica over a guitar going boom-chick-chick, and a horse walking |
+| 3-4 · The Inn, The Boardwalk | *Saloon Rag* - ragtime in C on the saloon piano, the left hand striding, with a banjo, a washboard, and a fiddle joining the second time round |
+| 5-6 · Hank's Hotel, Calico | *The Chase* - a gallop in A minor in the way of Morricone: a twanging guitar riff, drums, a whip, an anvil, a choir, and a trumpet with the tune |
+
+The showdowns and High Noon have none - a bell, then quiet, then the shout. All of it is
+synthesised by `tools/west_audio.py` into `laserapp/assets/west/sound/`.
 
 ## Shooting game
 

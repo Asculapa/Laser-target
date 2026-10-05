@@ -24,11 +24,15 @@ from laserapp.autocal import AutoCalibration, find_dot
 from laserapp.camera import FrameDecoder, jpeg_intact
 from laserapp.game import Game, HighScores, Stats, NORMAL, BONUS, DECOY
 from laserapp.mathgames import PACKS, BalloonMath, NumberHunt, make_task
-from laserapp.menu import GAMES, GameMenu
+from laserapp.menu import AGAIN, GAMES, LEARNING, OTHER, SHOOTING, EndButtons, GameMenu, entry
 from laserapp.silhouette import CENTRE_V, RING, Silhouette, zone
 from laserapp.detector import LaserDetector
 from laserapp import duel_art
 from laserapp.duel import ASSETS as DUEL_ASSETS, MUSIC, Duel, Lane
+from laserapp import jars
+from laserapp.jars import KINDS, SHELVES, JarLane, JarRange, QuickDraw
+from laserapp import west, west_art
+from laserapp.west import CLEAR, STAGES, West
 from laserapp.story import (ASSETS, END, INTRO, LEVELS, OUTRO, PLAY, RESULT, RETRY, TITLE,
                             Hold, Story)
 from laserapp.story_levels import (BRUTE, EYE, GLOAMLING, MOTH, SKY, Constellations, Ships,
@@ -552,7 +556,7 @@ def main() -> int:
     s, t = lane()
     s.update(s.now + t.lifetime + 0.1, None)
     passed &= check("a figure nobody shot scores nothing",
-                    s.results == [0] and s.stats.escaped == 1 and t.label == "too slow")
+                    s.results == [0] and s.stats.escaped == 1 and t.label == "запізно")
 
     s, t = lane()
     left, at = t.remaining(s.now), s.now
@@ -771,6 +775,679 @@ def main() -> int:
                         length >= Duel.COUNTDOWN + Duel.DURATION,
                         f"{length:.0f}s")
 
+    print("jar shoot:")
+    size = (1920, 1080)
+
+    def reddest_of(canvas):
+        return int((canvas[..., 2].astype(np.int16) - canvas[..., 1]).max())
+
+    canvas = overlay.blank(size)
+    for n, look in enumerate(KINDS):
+        jars.draw_jar(canvas, 200 + n * 300, 600, 220, look, 0.6)
+    passed &= check("no jar has any red in it", reddest_of(canvas) <= 0)
+    # A dot has to stand out on top of a jar: anything wider than a thin line
+    # is dim, so what is left bright after an opening the width of a dot is nothing.
+    bright = (canvas.max(axis=2) > jars.LARGE).astype(np.uint8)
+    dot = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+    passed &= check("nothing large on a jar is bright - a dot on it would be lost",
+                    not cv2.morphologyEx(bright, cv2.MORPH_OPEN, dot).any(),
+                    f"{int(cv2.morphologyEx(bright, cv2.MORPH_OPEN, dot).sum())} px")
+    worth = [KINDS[k] for k in jars.SIZES]
+    passed &= check("the smaller the jar, the more it pays and the longer it stays",
+                    all(a.height > b.height and a.points < b.points and a.lifetime < b.lifetime
+                        for a, b in zip(worth, worth[1:])))
+
+    g = JarRange(size, seed=4)
+    g.start(0.0)
+    looks = {p.look for p in g.plan}
+    passed &= check("both lanes are given the same jars, of every kind",
+                    g.lanes[0].plan is g.lanes[1].plan and len(g.plan) > 40
+                    and looks == set(KINDS), f"{len(g.plan)} jars")
+    passed &= check("a gold jar only after the first ten seconds",
+                    all(p.at > 10 for p in g.plan if p.look == "gold"))
+    apart = True
+    for i, a in enumerate(g.plan):
+        apart &= not any(b.station == a.station and b.at < a.at + a.lifetime + JarLane.DROP
+                         for b in g.plan[i + 1:])
+    passed &= check("no jar comes up where one is still standing", apart)
+    fits = True
+    for lane in g.lanes:
+        for p in g.plan:
+            t = lane._arrive(p)
+            above = max([f * size[1] for f in SHELVES if f * size[1] < t.foot] + [150])
+            fits &= lane.span[0] <= t.x - t.width / 2 and t.x + t.width / 2 <= lane.span[1] \
+                and t.foot - t.height >= above + 10
+    passed &= check("every jar fits its half, under the scores and the shelf above", fits)
+
+    def range_with(look, seed=4, station=1):
+        """A jar range just past its countdown, with `look` up in both lanes."""
+        g = JarRange(size, seed=seed)
+        g.start(0.0)
+        g.update(g.started - 0.2, None, [])
+        g.plan[:] = [jars.JarPopup(0.0, station, look, KINDS[look].lifetime)]
+        g.update(g.started + 0.2, None, [])
+        return g, [lane.targets[0] for lane in g.lanes]
+
+    g, (left, right) = range_with("small")
+    g.update(g.now + 0.05, None, [(left.x, left.y)])
+    a, b = g.lanes
+    passed &= check("a flash on a jar breaks it, for the player whose half it is in",
+                    a.stats.hits == 1 and a.score > 0 and b.score == 0
+                    and left.shot and right.dying is None, f"{a.score} : {b.score}")
+    small = a.score
+    g, (left, right) = range_with("big")
+    g.update(g.now + 0.05, None, [(left.x, left.y)])
+    passed &= check("a small jar pays more than a big one", small > g.lanes[0].score,
+                    f"{small} against {g.lanes[0].score}")
+    g, (left, right) = range_with("mid")
+    g.update(g.now + 0.05, None, [(left.x, left.y), (right.x, right.y)])
+    quick = g.lanes[0].score
+    g, (left, right) = range_with("mid")
+    g.update(left.born + 0.8 * left.lifetime, None, [(left.x, left.y)])
+    passed &= check("...and a jar shot quickly more than one shot late",
+                    quick > g.lanes[0].score and g.lanes[1].stats.hits == 0,
+                    f"{quick} against {g.lanes[0].score}")
+    g, (left, right) = range_with("mid")
+    g.update(g.now + 0.05, None, [(left.x, left.y - left.height)])
+    passed &= check("a flash beside the jar is a miss, and costs nothing",
+                    g.lanes[0].stats.misses == 1 and g.lanes[0].score == 0)
+    g, (left, right) = range_with("big")
+    g.update(g.now + 5.0, None, [])
+    passed &= check("a jar left until its time is up is counted as got away",
+                    [lane.stats.escaped for lane in g.lanes] == [1, 1] and left.dying is not None
+                    and not left.shot)
+    g, (left, right) = range_with("small")
+    for _ in range(4):
+        g.update(g.now + 0.05, None, [(left.x, left.y - left.height)])
+    held = 0
+    while left.dying is None and held < 40:
+        held += 1
+        g.update(g.now + 1 / 30, None, [(left.x, left.y)])
+    passed &= check("a beam held on a jar breaks it as well", g.lanes[0].stats.hits == 1,
+                    f"after {held / 30:.2f}s")
+    g, (left, right) = range_with("small")
+    remaining, at, clock = left.remaining(g.now), g.now, g.time_left
+    g.toggle_pause(at)
+    g.update(at + 10, None, [(left.x, left.y)])
+    g.toggle_pause(at + 30)
+    g.update(at + 30.01, None, [])
+    passed &= check("pausing stops the clock and the jars",
+                    g.lanes[0].stats.hits == 0 and abs(g.time_left - clock) < 0.05
+                    and abs(left.remaining(g.now) - remaining) < 0.01)
+
+    def play_range(g, delays):
+        """A round with a bot per lane, which shoots each jar after `delay`."""
+        now, canvas, reddest = g.now, overlay.blank(size), 0
+        while g.state != "over" and now < g.now + 200:
+            now += 1 / 30
+            dots = []
+            for lane, delay in zip(g.lanes, delays):
+                for t in lane.targets:
+                    if t.dying is None and t.age(now) > delay and int(now * 30) % 6 < 3:
+                        dots.append((t.x, t.y))
+                        break
+            g.update(now, dots[0] if dots else None, dots)
+            if int(now * 30) % 15 == 0:
+                canvas[:] = 0
+                g.draw(canvas)
+                reddest = max(reddest, reddest_of(canvas))
+        g.draw_over(canvas, None, None)
+        return max(reddest, reddest_of(canvas))
+
+    g = JarRange(size, seed=9)
+    g.start(0.0)
+    reddest = play_range(g, (0.4, 1.2))
+    a, b = g.lanes
+    passed &= check("a full round plays out, and the quicker player wins it",
+                    g.state == "over" and g.winner == 0 and g.wins == [1, 0]
+                    and a.score > b.score,
+                    f"{a.score} : {b.score}, {a.stats.hits} and {b.stats.hits} jars")
+    passed &= check("nothing drawn at the jars is red", reddest <= 0)
+    length = audio.Player(jars.ASSETS).length(JarRange.TUNE)
+    if length is None:
+        print("  SKIP  no music (tools/jars_audio.py) - the jar range plays without")
+    else:
+        passed &= check("the music lasts the round out, countdown included",
+                        length >= JarRange.COUNTDOWN + JarRange.DURATION, f"{length:.0f}s")
+
+    def drawn(seed=5):
+        """A quick draw at the moment its first jar is up."""
+        q = QuickDraw(size, seed=seed)
+        q.start(0.0)
+        now = 0.0
+        while q.phase != jars.DRAW:
+            now += 1 / 30
+            q.update(now, None, [])
+        return q, [lane.targets[0] for lane in q.lanes]
+
+    q, (left, right) = drawn()
+    passed &= check("a jar comes up in both halves, in the same place",
+                    abs((left.x - q.lanes[0].span[0]) - (right.x - q.lanes[1].span[0])) < 1
+                    and left.y == right.y and left.height == right.height)
+    q.update(q.now + 0.4, None, [(right.x, right.y)])
+    q.update(q.now + 0.2, None, [(left.x, left.y), (right.x, right.y)])
+    a, b = q.lanes
+    passed &= check("the first to break their jar takes the point, and both times are kept",
+                    q.phase == jars.SHOWN and q.point_to == 1 and b.score == 1 and a.score == 0
+                    and a.reaction is not None and b.reaction < a.reaction,
+                    f"{b.reaction:.2f}s against {a.reaction:.2f}s")
+
+    q = QuickDraw(size, seed=5)
+    q.start(0.0)
+    now = q.started + 0.5
+    q.update(now, None, [])
+    q.update(now + 0.1, None, [(300.0, 500.0)])
+    passed &= check("a shot before the jar is up gives the point away",
+                    q.phase == jars.SHOWN and q.point_to == 1 and q.lanes[1].score == 1
+                    and q.lanes[0].fouled and q.lanes[0].verdict == "ЗАРАНО")
+    q = QuickDraw(size, seed=5)
+    q.start(0.0)
+    q.update(q.started + 0.5, None, [])
+    q.update(q.started + 0.6, None, [(300.0, 500.0), (1500.0, 500.0)])
+    passed &= check("...and when both shoot too soon, nobody has it",
+                    q.phase == jars.SHOWN and q.point_to is None
+                    and all(lane.score == 0 for lane in q.lanes))
+    q, (left, right) = drawn()
+    q.update(q.now + 5.0, None, [])
+    passed &= check("a jar nobody breaks is nobody's point",
+                    q.phase == jars.SHOWN and q.point_to is None
+                    and [lane.verdict for lane in q.lanes] == ["запізно"] * 2)
+    q, (left, right) = drawn()
+    q.update(q.now + 0.3, None, [(left.x, left.y), (right.x, right.y)])
+    passed &= check("two shots in the same moment are a dead heat",
+                    q.phase == jars.SHOWN and q.point_to is None)
+
+    q = QuickDraw(size, seed=5)
+    q.start(0.0)
+    q.update(q.started + 0.1, None, [])
+    wait_left = q._until - q.now
+    q.toggle_pause(q.now)
+    q.update(q.now + 20, None, [])
+    q.toggle_pause(q.now)
+    q.update(q.now + 0.01, None, [])
+    passed &= check("pausing holds the wait", q.phase == jars.WAIT
+                    and abs((q._until - q.now) - (wait_left - 0.01)) < 0.02)
+
+    def play_draw(q, delays):
+        """A match with a bot per lane: it flashes on its jar after `delay`."""
+        now, canvas, reddest = q.now, overlay.blank(size), 0
+        while q.state != "over" and now < q.now + 300:
+            now += 1 / 30
+            dots = []
+            for lane, delay in zip(q.lanes, delays):
+                live = [t for t in lane.targets if t.dying is None]
+                if live and live[0].age(now) > delay:
+                    dots.append((live[0].x, live[0].y))
+            q.update(now, dots[0] if dots else None, dots)
+            if int(now * 30) % 10 == 0:
+                canvas[:] = 0
+                q.draw(canvas)
+                reddest = max(reddest, reddest_of(canvas))
+        q.draw_over(canvas, None, None)
+        return max(reddest, reddest_of(canvas))
+
+    q = QuickDraw(size, seed=7)
+    q.start(0.0)
+    reddest = play_draw(q, (0.3, 0.5))
+    a, b = q.lanes
+    passed &= check("the quicker player wins the match, first to five",
+                    q.state == "over" and q.winner == 0 and q.wins == [1, 0]
+                    and a.score == QuickDraw.TARGET and b.score == 0
+                    and len(b.stats.reactions) == QuickDraw.TARGET,
+                    f"{a.score} : {b.score}")
+    passed &= check("nothing drawn in the quick draw is red", reddest <= 0)
+    passed &= check("G is a rematch, the matches won kept",
+                    q.key(ord("g")) and q.state == "playing" and q.wins == [1, 0]
+                    and all(lane.score == 0 for lane in q.lanes) and q.phase == jars.WAIT)
+
+    print("wild west:")
+    size = (1920, 1080)
+    reds, brightest = 0, 0
+    for look in west_art.LOOKS:
+        poses = ("stand", "shoot", "idle", "walk") if west_art.LOOKS[look].armed else ("stand",)
+        for pose in poses:
+            for img, _ in west_art.frames(look, pose):
+                reds = max(reds, reddest_of(img))
+                brightest = max(brightest, int(img.max()))
+    passed &= check("the CC0 sprites are recoloured: no red, nothing bright",
+                    reds <= 0 and brightest <= west_art.BRIGHT,
+                    f"{len(west_art.LOOKS)} characters, brightest {brightest}")
+    # Every figure has to take a laser dot - not only one that saturates the
+    # camera, but a moderate one too: the detector looks for red over the
+    # stronger of green and blue, so a figure strong in either would hide it.
+    small = (960, 540)
+    yy, xx = np.mgrid[:small[1], :small[0]]
+    dice = np.random.default_rng(1)
+    back = west_art.backdrop(west_art.SCENES[0], small)
+    found = {}
+    for look in west_art.LOOKS:
+        s_ = west_art.sprite(look, "stand", 0, 200, False)
+        ys, xs = np.nonzero(s_.solid)
+        found[look] = 0
+        for _ in range(20):
+            i = dice.integers(len(xs))
+            frame = back.copy()
+            west_art.blit(frame, s_, 480, 450)
+            x, y = 480 - s_.fx + xs[i], 450 - s_.fy + ys[i]
+            frame = cv2.GaussianBlur(frame, (7, 7), 0).astype(np.float32)
+            spot = np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / 18.0)
+            frame += np.dstack([12 * spot, 12 * spot, 80 * spot])     # a moderate red dot
+            frame += dice.normal(0, 4, frame.shape)
+            d = LaserDetector().detect(np.clip(frame, 0, 255).astype(np.uint8))
+            found[look] += d is not None and abs(d.x - x) < 6 and abs(d.y - y) < 6
+    passed &= check("a moderate laser dot is found on every part of every figure",
+                    min(found.values()) >= 19,
+                    "  ".join(f"{k} {v}/20" for k, v in found.items()))
+    town = [west_art.backdrop(sc, size) for sc in west_art.SCENES]
+    passed &= check("...and the photographs are a dim town by moonlight",
+                    all(reddest_of(t) <= 0 and t.max() <= 90 for t in town),
+                    ", ".join(sc.name for sc in west_art.SCENES))
+    g = West(size, seed=1)
+    g.start(0.0)
+    canvas = overlay.blank(size)
+    for n, kind in enumerate(("coin", "star")):
+        g._draw_pickup(canvas, west.Pickup(x=400 + 400 * n, y=300, radius=40, born=0,
+                                           lifetime=9, kind=kind), 0.0)
+    bright = (canvas.max(axis=2) > jars.LARGE).astype(np.uint8)
+    dot = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+    passed &= check("a star or a coin to shoot is bright only at its edge",
+                    not cv2.morphologyEx(bright, cv2.MORPH_OPEN, dot).any()
+                    and reddest_of(canvas) <= 0)
+    passed &= check("six streets, each with its music",
+                    len(west_art.SCENES) == len(STAGES) == 6
+                    and {sc.music for sc in west_art.SCENES} == {1, 2, 3})
+    sources = lambda side: {west_art.LOOKS[n].source for n in side}
+    passed &= check("bandits and townsfolk tell apart: nobody is on both sides",
+                    sources(west_art.BANDITS).isdisjoint(sources(west_art.TOWNSFOLK))
+                    and len(west_art.BANDITS) >= 2 and len(west_art.TOWNSFOLK) >= 4
+                    and west_art.BOSS in west_art.BANDITS,
+                    f"{len(west_art.BANDITS)} bandits, {len(west_art.TOWNSFOLK)} townsfolk")
+    fits = []
+    for sc in west_art.SCENES:
+        for spot in sc.spots + (sc.showdown,):
+            x, foot, h, clip = west_art.place(sc, spot, size)
+            fits.append(60 < x < size[0] - 60 and foot - h >= 110
+                        and (foot <= size[1] if clip is None else foot - h < clip < size[1]))
+    passed &= check("every place a figure stands is on screen, under the scores",
+                    all(fits), f"{sum(fits)} of {len(fits)}")
+
+    g = West(size, seed=2)
+    g.start(0.0)
+    g.update(g.started + 0.01, None, [])
+    shows, kinds = [], set()
+    for n in range(600):
+        g.stage = n % len(STAGES)
+        g.targets.clear()
+        g._left = 99
+        if not g._spawn(g.now):
+            continue
+        t = g.targets[0]
+        kinds.add(t.kind)
+        if t.armed and t.clip is not None:
+            s_ = t.sprite(0)
+            shows.append(t.foot - s_.fy + s_.muzzle[1] < t.clip)
+    passed &= check("a bandit behind cover shows his gun over it",
+                    shows and all(shows), f"{len(shows)} bandits behind sills and barrels")
+    passed &= check("one player meets pop-ups, peekers and runners - no team shots",
+                    kinds == {west.POP, west.PEEK, west.RUN}, " ".join(sorted(kinds)))
+
+    def west_with(*looks, seed=3, players=1, level="sheriff", xs=None):
+        """A town just past its countdown, with `looks` up and risen."""
+        g = West(size, players=players, level=level, seed=seed)
+        g.start(0.0)
+        if players == 2:
+            g.key(32)
+        g.update(g.started + 0.01, None, [])
+        g.targets[:] = [t for t in g.targets if isinstance(t, west.Strip)]
+        g._next = math.inf
+        g._drops = []
+        for i, look in enumerate(looks):
+            spot = g.scene.spots[(12 + i) % len(g.scene.spots)]
+            x, foot, h, clip = west_art.place(g.scene, spot, size)
+            if xs is not None:
+                x = xs[i]
+            g.targets.append(west.Figure(x=x, y=foot - h / 2, radius=h / 2, born=g.now,
+                                         lifetime=2.0, look=look, spot=12 + i, foot=foot,
+                                         height=h, clip=clip, side=g.side_of((x, foot))))
+        g.update(g.now + 0.3, None, [])
+        return g, [t for t in g.targets if isinstance(t, west.Figure)]
+
+    def off(g):
+        """The beam off long enough that the next dot is a new shot."""
+        for _ in range(12):
+            g.update(g.now + 1 / 30, None, [])
+
+    def on(t, half=None):
+        """A spot on the part of `t` that shows; `half` keeps to that half of the screen."""
+        s_ = west_art.sprite(t.look, "stand", 0, t.height, t.flip)
+        ys, xs = np.nonzero(s_.solid)
+        X, Y = t.x - s_.fx + xs, t.foot - s_.fy + ys
+        keep = np.ones(len(X), bool)
+        if t.clip is not None:
+            keep &= Y < t.clip - 4
+        if half is not None:
+            keep &= (X < size[0] / 2 - 8) if half == 0 else (X > size[0] / 2 + 8)
+        X, Y = X[keep], Y[keep]
+        k = len(X) // 2
+        return (float(X[k]), float(Y[k]))
+
+    g, (a,) = west_with("gunslinger")
+    g.update(g.now + 0.05, None, [on(a)])
+    passed &= check("a flash on a bandit brings him down, and scores",
+                    a.end == "hit" and g.stats.hits == 1 and g.stats.score > 0
+                    and g.lives == g.level.lives and g.team[0].ammo == 5)
+    g, (a,) = west_with("lady")
+    g.update(g.now + 0.05, None, [on(a)])
+    passed &= check("shooting the townsfolk costs a life",
+                    a.end == "hit" and g.lives == g.level.lives - 1 and g.stats.decoys == 1)
+    g, (a,) = west_with("gunslinger")
+    g.update(g.now + 2.0, None, [])
+    passed &= check("a bandit left until his ring closes fires, and that costs a life",
+                    a.end == "fired" and g.lives == g.level.lives - 1 and g.stats.escaped == 1)
+    g, (a, b) = west_with("outlaw", "gunslinger")
+    g.update(g.now + 0.05, None, [on(a), on(b)])
+    passed &= check("two lasers, two shots in the same moment",
+                    a.end == b.end == "hit" and g.stats.hits == 2)
+    g, (a, b) = west_with("outlaw", "gunslinger")
+    x0, y0 = a.x, a.y - a.height
+    g.update(g.now + 0.05, None, [(x0, y0)])               # lit above him: a miss
+    for k in range(1, 40):                                 # then walked over him, lit
+        g.update(g.now + 1 / 30, None, [(x0 + (on(a)[0] - x0) * min(1, k / 10),
+                                         y0 + (on(a)[1] - y0) * min(1, k / 10))])
+    passed &= check("a lit beam walked on to a bandit is one gun: a hold, not a new shot",
+                    g.stats.misses == 1 and g.stats.hits == 1 and a.end == "hit")
+    g, (a,) = west_with("outlaw")
+    left, at = a.remaining(g.now), g.now
+    g.toggle_pause(at)
+    g.update(at + 20, None, [on(a)])
+    g.toggle_pause(at + 30)
+    g.update(at + 30.01, None, [])
+    passed &= check("pausing holds the bandits' fire",
+                    a.dying is None and abs(a.remaining(g.now) - left) < 0.02
+                    and g.lives == g.level.lives)
+
+    # The six-shooter.
+    g, (a,) = west_with("gunslinger")
+    a.lifetime = 99
+    for k in range(7):                                     # seven shots at nothing
+        off(g)
+        g.update(g.now + 0.05, None, [(300.0, 200.0)])
+    passed &= check("six shots, then the gun is empty", g.team[0].ammo == 0
+                    and g.stats.misses == 6, f"{g.stats.misses} misses")
+    off(g)
+    g.update(g.now + 0.05, None, [on(a)])
+    passed &= check("...and an empty gun shoots nobody", a.dying is None)
+    off(g)
+    g.update(g.now + 0.05, None, [(900.0, size[1] - 10.0)])
+    off(g)
+    g.update(g.now + 0.05, None, [on(a)])
+    passed &= check("a shot at the RELOAD strip fills it again",
+                    a.end == "hit" and g.team[0].ammo == 5)
+
+    g, (a,) = west_with("gunslinger")
+    a.lifetime = 99
+    for k in range(7):
+        off(g)
+        g.update(g.now + 0.05, None, [(300.0, 200.0)])
+    passed &= check("running dry the first time stops and says how to reload",
+                    "НАБОЇ СКІНЧИЛИСЯ" in g._message[0] and "ПЕРЕЗАРЯДКИ" in g._sub[0])
+    canvas = overlay.blank(size)
+    g.draw(canvas)
+    bar = canvas[int(size[1] * west.STRIP) + 4:, :]
+    passed &= check("...and the RELOAD bar lights up in the player's colour",
+                    bar.reshape(-1, 3).max(axis=0)[0] > 200 and reddest_of(canvas) <= 0)
+    g, _ = west_with(level="deputy")
+    passed &= check("a deputy's gun never runs dry",
+                    g.level.ammo == 0 and not any(isinstance(t, west.Strip) for t in g.targets))
+
+    # Peekers and runners.
+    g, (a,) = west_with("outlaw")
+    a.kind, a.lifetime = west.PEEK, 5.0
+    seen = []
+    for k in range(60):
+        g.update(g.now + 1 / 30, None, [])
+        seen.append(a.hidden)
+    passed &= check("a peeker ducks down and comes up again", any(seen) and not all(seen))
+    while not a.hidden:
+        g.update(g.now + 1 / 30, None, [])
+    off(g)
+    g.update(g.now + 0.05, None, [on(a)])
+    passed &= check("...and while he is down there is nothing to hit",
+                    a.dying is None and g.stats.misses == 1)
+    a.lifetime = a.age(g.now) + 0.05
+    while a.hidden and a.dying is None:
+        g.update(g.now + 1 / 30, None, [])
+    passed &= check("...nor does he fire from behind his cover",
+                    a.dying is None or not a.hidden)
+    g = West(size, seed=4)
+    g.start(0.0)
+    g.update(g.started + 0.01, None, [])
+    g.stage = 2
+    g._left = 99
+    while not any(t.kind == west.RUN for t in g.figures()):
+        g.targets[:] = [t for t in g.targets if isinstance(t, west.Strip)]
+        g._spawn(g.now)
+    r = next(t for t in g.figures() if t.kind == west.RUN)
+    x0 = r.x
+    for _ in range(15):
+        g.update(g.now + 1 / 30, None, [])
+    passed &= check("a runner crosses the street", abs(r.x - x0) > 50, f"{abs(r.x - x0):.0f}px")
+
+    # Two players.
+    def two(*looks, xs, **kw):
+        return west_with(*looks, players=2, xs=xs, **kw)
+
+    g, (a, b) = two("gunslinger", "outlaw", xs=[500.0, 1400.0])
+    g.update(g.now + 0.05, None, [on(a), on(b)])
+    p1, p2 = g.team
+    passed &= check("two players: a shot counts for the side it lands on",
+                    p1.stats.hits == 1 and p2.stats.hits == 1 and p1.stats.score > 0
+                    and p2.stats.score > 0 and g.stats.score == p1.stats.score + p2.stats.score)
+    g, (a,) = two("gunslinger", xs=[1400.0])
+    start = (500.0, 500.0)
+    g.update(g.now + 0.05, None, [start])                  # P1's beam comes on, on the left
+    for k in range(1, 40):                                 # ...and is slid across, lit
+        g.update(g.now + 1 / 30, None, [(start[0] + (on(a)[0] - start[0]) * min(1, k / 12),
+                                         start[1] + (on(a)[1] - start[1]) * min(1, k / 12))])
+    passed &= check("a beam slid across to the partner's side is a save",
+                    a.end == "hit" and g.team[0].saves == 1 and g.team[0].stats.hits == 1
+                    and g.team[1].stats.hits == 0)
+    g, (a, b, c) = two("gunslinger", "outlaw", "gunslinger", xs=[400.0, 1450.0, 700.0])
+    g.update(g.now + 0.05, None, [on(a)])
+    off(g)
+    g.update(g.now + 0.05, None, [on(b)])
+    passed &= check("hits in turn by the two make a crossfire", g.crossfire == 1
+                    and g.multiplier > 1.0 + 0.1 * g.combo)
+    g, (a,) = two("gunslinger", xs=[960.0])
+    a.kind, a.lifetime = west.TEAM, 5.0
+    g.update(g.now + 0.05, None, [on(a, 0)])
+    passed &= check("a big one: one player's shot alone does not bring him down",
+                    a.dying is None and a.first is not None)
+    off(g)
+    g.update(g.now + 0.05, None, [on(a, 0), on(a, 1)])
+    passed &= check("...a shot from each, together, does", a.end == "hit"
+                    and g.team[0].stats.score > 0 and g.team[1].stats.score > 0)
+
+    def to_showdown(players=1, seed=3):
+        g, _ = west_with(seed=seed, players=players, xs=[] if players == 2 else None)
+        g._left = 0
+        g.update(g.now + 0.05, None, [])
+        return g
+
+    g = to_showdown()
+    g.update(g.now + 0.5, None, [(300.0, 300.0)])
+    passed &= check("a shot before the draw costs a life", g.phase == west.SHOWDOWN
+                    and g.lives == g.level.lives - 1 and not g._drawn)
+    g = to_showdown()
+    while not g._drawn:
+        g.update(g.now + 1 / 30, None, [])
+    g.update(g.now + 0.3, None, [on(g.bosses[0])])
+    for _ in range(60):
+        g.update(g.now + 1 / 30, None, [])
+    passed &= check("...and one after it wins the showdown, and the street",
+                    g.phase == CLEAR and g.team[0].draws and g.lives == g.level.lives,
+                    f"in {g.team[0].draws[0]:.2f}s" if g.team[0].draws else "")
+    g = to_showdown()
+    while not g._drawn:
+        g.update(g.now + 1 / 30, None, [])
+    g.update(g.now + STAGES[0].draw + 0.05, None, [])
+    passed &= check("too slow on the draw costs a life", g.lives == g.level.lives - 1
+                    and g.bosses[0].end == "fired")
+    g = to_showdown(players=2)
+    while not g._drawn:
+        g.update(g.now + 1 / 30, None, [])
+    a, b = g.bosses
+    g.update(g.now + 0.3, None, [on(a)])
+    for _ in range(60):
+        g.update(g.now + 1 / 30, None, [])
+    passed &= check("two players face two bosses: one down is not enough",
+                    len(g.bosses) == 2 and g.phase == west.SHOWDOWN
+                    and g.lives == g.level.lives - 1)
+
+    g = West(size, players=2, seed=3)
+    g.start(0.0)
+    passed &= check("two players choose before the countdown", g.phase == west.SETUP)
+    boxes = [g.setup_boxes(0)[1], g.setup_boxes(1)[0]]
+    now = 0.0
+    while g.phase == west.SETUP and now < 5:
+        now += 1 / 30
+        g.update(now, None, [((x0 + x1) / 2, (y0 + y1) / 2) for x0, y0, x1, y1 in boxes])
+    passed &= check("...each with a laser on their side: player 1 easier, player 2 as it is",
+                    g.phase == west.STREET and g.team[0].easy and not g.team[1].easy,
+                    f"after {now:.1f}s")
+
+    # High Noon.
+    g, _ = two(xs=[])
+    g._noon_for = -1
+    g.stage = 1
+    g.phase = CLEAR
+    g._banner = ("", g.now)
+    g.update(g.now + 0.05, None, [])
+    passed &= check("after the second street, the two meet at High Noon", g.phase == west.NOON)
+    for _ in range(2):
+        while not g._drawn:
+            g.update(g.now + 1 / 30, None, [])
+        b = g.bottles[1]
+        g.update(g.now + 0.3, None, [(b.x, b.y)])
+        for _ in range(70):
+            g.update(g.now + 1 / 30, None, [])
+    passed &= check("...first to break their bottle twice wins it",
+                    g.team[1].noon == 1 and g.phase == CLEAR, str(g.noon_score))
+    for _ in range(120):
+        g.update(g.now + 1 / 30, None, [])
+    passed &= check("...and then on to the next street", g.phase == west.STREET and g.stage == 2)
+
+    g, _ = two(xs=[])
+    now = g.now
+    for _ in range(int(West.ABSENT * 30) + 30):
+        now += 1 / 30
+        g.update(now, None, [(400.0, 500.0)] if int(now * 2) % 2 else [])
+    passed &= check("a side with no laser for a long time: the game waits for its player",
+                    g.state == "paused" and g._absent == 1)
+    g.update(now + 0.1, None, [(1400.0, 500.0)])
+    passed &= check("...and goes on when that laser is back", g.state == "playing")
+
+    def bot_dots(g, bots, now):
+        dots = []
+        for side, delay, memo in bots:
+            if g.level.ammo and g.phase != west.NOON and g.team[side].ammo == 0:
+                target, pt = "reload", (size[0] * (0.25 + 0.5 * side), size[1] - 5.0)
+            else:
+                best = None
+                for t in g.targets:
+                    if t.dying is not None or isinstance(t, west.Strip):
+                        continue
+                    if g.two and not (isinstance(t, west.Figure) and t.kind == west.TEAM):
+                        if isinstance(t, west.Bottle):
+                            if t.side != side:
+                                continue
+                        elif (t.x < size[0] / 2) != (side == 0):
+                            continue
+                    if isinstance(t, west.Figure) and (not t.armed or t.hidden):
+                        continue
+                    if t.age(now) < (0.25 if t in g.bosses else delay):
+                        continue
+                    pt = on(t, side if g.two and t.kind == west.TEAM else None) \
+                        if isinstance(t, west.Figure) else (t.x, t.y)
+                    urgency = t.remaining(now) if t.lifetime < 1e9 else 9
+                    if best is None or urgency < best[0]:
+                        best = (urgency, t, pt)
+                if best is None:
+                    memo["t"] = None
+                    continue
+                _, target, pt = best
+            if target is not memo.get("t"):
+                memo["t"], memo["since"] = target, now
+            if (now - memo["since"]) % 0.5 > 0.4:          # a flash every half second
+                dots.append(pt)
+        return dots
+
+    def play_west(g, delay, players=1):
+        now, canvas, reddest = g.now, overlay.blank(size), 0
+        bots = [(i, delay, {}) for i in range(players)]
+        while g.state != "over" and now < 900:
+            now += 1 / 30
+            dots = bot_dots(g, bots, now)
+            g.update(now, dots[0] if dots else None, dots)
+            if int(now * 30) % 25 == 0:
+                g.draw(canvas)
+                reddest = max(reddest, reddest_of(canvas))
+        g.draw(canvas)
+        g.draw_over(canvas, None, None)
+        return max(reddest, reddest_of(canvas)), now
+
+    g = West(size, level="deputy", seed=5)
+    g.start(0.0)
+    reddest, took = play_west(g, 0.7)
+    passed &= check("a steady deputy saves the town: six streets, six showdowns",
+                    g.state == "over" and g.won and len(g.team[0].draws) == len(STAGES),
+                    f"score {g.stats.score}, {took / 60:.1f} minutes, {g.rank()}")
+    passed &= check("nothing drawn in the town is red", reddest <= 0)
+    g = West(size, players=2, level="deputy", seed=5)
+    g.start(0.0)
+    g.key(32)
+    reddest, took = play_west(g, 0.7, players=2)
+    passed &= check("two deputies save it together, with a High Noon or two on the way",
+                    g.won and sum(p.noon for p in g.team) == 2
+                    and all(p.stats.score > 0 for p in g.team),
+                    f"{g.team[0].stats.score} + {g.team[1].stats.score}, "
+                    f"{took / 60:.1f} minutes")
+    passed &= check("...and each goes home with an award", all(g.awards()),
+                    " / ".join(", ".join(a) for a in g.awards()))
+    passed &= check("nothing drawn for two is red", reddest <= 0)
+    g = West(size, level="marshal", seed=5)
+    g.start(0.0)
+    play_west(g, 99.0)
+    passed &= check("a marshal who never shoots loses the town",
+                    g.state == "over" and not g.won and g.lives == 0 and g.rank() == "ЖОВТОДЗЬОБ")
+
+    pieces = [audio.Player(west.SOUNDS).length(f"music{n + 1}") for n in range(3)]
+    if not any(pieces):
+        print("  SKIP  no music (tools/west_audio.py) - the town plays without")
+    else:
+        passed &= check("each piece of music is a piece of its own",
+                        all(pieces) and len(set(round(l, 1) for l in pieces)) == len(pieces),
+                        "  ".join(f"{l:.0f}s" for l in pieces))
+
+    class Tape(audio.Player):
+        def __init__(self):
+            super().__init__(west.SOUNDS)
+            self.played = []
+
+        def music(self, name):
+            if not self.played or self.played[-1] != name:
+                self.played.append(name)
+
+    g = West(size, level="deputy", seed=5)
+    g.sound = Tape()
+    g.start(0.0)
+    play_west(g, 0.5)
+    passed &= check("...and each street plays its own",
+                    g.sound.played == [f"music{sc.music}" for sc in west_art.SCENES]
+                    or [n for i, n in enumerate(g.sound.played)
+                        if i == 0 or n != g.sound.played[i - 1]] ==
+                    ["music1", "music2", "music3"], " ".join(g.sound.played))
+
     print("balloon math:")
     import random
 
@@ -876,19 +1553,19 @@ def main() -> int:
     # Each rule is re-checked here against an independent statement of it.
     def oracle(text):
         w = text.split()
-        if text.startswith("multiples of"):
-            return lambda v: v % int(w[2]) == 0
-        if text.startswith("divisors of"):
-            return lambda v: int(w[2]) % v == 0
-        if text in ("even numbers", "odd numbers"):
-            return lambda v: v % 2 == (0 if w[0] == "even" else 1)
-        if text == "prime numbers":
+        if text.startswith("кратні"):
+            return lambda v: v % int(w[1]) == 0
+        if text.startswith("дільники"):
+            return lambda v: int(w[1]) % v == 0
+        if text in ("парні числа", "непарні числа"):
+            return lambda v: v % 2 == (0 if w[0] == "парні" else 1)
+        if text == "прості числа":
             return lambda v: v in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59)
-        if text.startswith("equal to"):
-            return lambda v: v == value(w[2])
-        if text == "perfect squares":
+        if text.startswith("дорівнюють"):
+            return lambda v: v == value(w[1])
+        if text == "квадрати чисел":
             return lambda v: round(v ** 0.5) ** 2 == v
-        if text.startswith("powers of"):
+        if text.startswith("степені числа"):
             return lambda v: v in [int(w[2]) ** e for e in range(1, 12)]
         expr = text.replace("x", "*(v)").replace("|*(v)|", "abs(v)").replace(" *(v)", " (v)")
         expr = expr[1:] if expr.startswith("*") else expr
@@ -977,6 +1654,18 @@ def main() -> int:
     centre = lambda box: ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
     passed &= check("tiles fit on screen", len(boxes) == len(GAMES) and
                     all(0 <= x0 < x1 <= 1920 and 0 <= y0 < y1 <= 1080 for x0, y0, x1, y1 in boxes))
+    apart = all(not (a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3])
+                for i, a in enumerate(boxes) for b in boxes[i + 1:])
+    passed &= check("the games are in two rows, shooting and learning, none crowded",
+                    [key for key, _ in menu.rows()] == [SHOOTING, LEARNING] and apart
+                    and all(len(ids) <= GameMenu.MOST for _, ids in menu.rows())
+                    and min(x1 - x0 for x0, _, x1, _ in boxes) >= 300,
+                    f"tiles {min(x1 - x0 for x0, _, x1, _ in boxes)}px wide")
+    roomy = GameMenu((1920, 1080))
+    roomy.choose(GAMES.index(entry("Дикий Захід")))
+    passed &= check("the Wild West's levels are a table: a row for one player, a row for two",
+                    [(key, len(ids)) for key, ids in roomy.rows()] ==
+                    [("1 гравець", 3), ("2 гравці", 3)])
     now, picked = 0.0, None
     while now < 3 and menu.page is None:
         now += 0.05
@@ -987,16 +1676,17 @@ def main() -> int:
     passed &= check("...the targets and the silhouette range",
                     [type(menu.choose(i)((1920, 1080))) for i in (0, 1)] == [Game, Silhouette])
     menu = GameMenu((1920, 1080))
+    balloons = GAMES.index(entry("Математичні кульки"))
     now, picked = 0.0, None
     while now < 3 and menu.page is None:
         now += 0.05
-        picked = menu.update(now, centre(boxes[1]))
+        picked = menu.update(now, centre(boxes[balloons]))
     opened = now
     for _ in range(10):                           # the same hold, half a second on
         now += 0.05
-        picked = picked or menu.update(now, centre(boxes[1]))
+        picked = picked or menu.update(now, centre(boxes[balloons]))
     passed &= check("a game with levels opens its level page first",
-                    picked is None and menu.page == 1, f"after {opened:.1f}s")
+                    picked is None and menu.page == balloons, f"after {opened:.1f}s")
     while now < opened + 3 and picked is None:
         now += 0.05
         picked = menu.update(now, centre(menu.boxes()[1]))
@@ -1027,23 +1717,49 @@ def main() -> int:
         flaky.update(now, centre(boxes[0]) if 0.8 <= now < 1.4 else None)
     passed &= check("...but a hold that is let go picks nothing",
                     flaky.page is None and flaky._hover is None)
-    made = [f((1920, 1080)) for e in GAMES for _, f in e.options]
+    made = [o.start((1920, 1080)) for e in GAMES for o in e.options]
     names = [g.scores_name for g in made]
     passed &= check("every menu entry builds its game",
                     [type(g).__name__ for g in made] ==
-                    ["Game", "Silhouette"] + ["BalloonMath"] * 3 + ["NumberHunt"] * 2
-                    + ["Story"] * 2 + ["Duel"])
+                    ["Game", "Silhouette"] + ["West"] * 6 + ["Duel", "JarRange", "QuickDraw"]
+                    + ["BalloonMath"] * 3 + ["NumberHunt"] * 2 + ["Story"] * 2 + ["TeacherSettings"])
     passed &= check("each scored game keeps its own table",
-                    names == ["highscores", "highscores-silhouette", None, None, None,
-                              "highscores-hunt-5-6", "highscores-hunt-7-9", None, None, None],
+                    names == ["highscores", "highscores-silhouette"]
+                    + [f"highscores-west-{n}p-{l}" for n in (1, 2)
+                       for l in ("deputy", "sheriff", "marshal")]
+                    + [None] * 6 + ["highscores-hunt-5-6", "highscores-hunt-7-9", None, None, None],
                     str(names))
     passed &= check("ESC steps back a page, then out", menu.back() and not menu.back())
+
+    end = EndButtons((1920, 1080), 0.0)
+    again, other = (centre(b) for b in end.boxes())
+    now, picked = 0.0, None
+    while now < EndButtons.SETTLE - 0.1:
+        now += 1 / 30
+        picked = picked or end.update(now, [again])
+    passed &= check("at the end, the buttons wait for the last shots to be over",
+                    picked is None)
+    while now < 4 and picked is None:
+        now += 1 / 30
+        picked = end.update(now, [(300.0, 300.0), again])   # either laser will do
+    passed &= check("...then a laser held on PLAY AGAIN plays again", picked == AGAIN,
+                    f"after {now - EndButtons.SETTLE:.1f}s")
+    end = EndButtons((1920, 1080), 0.0)
+    now, picked = 0.0, None
+    while now < 5 and picked is None:
+        now += 1 / 30
+        picked = end.update(now, [other] if int(now * 30) % 5 else [])   # a flicker
+    passed &= check("...and one on OTHER GAMES goes back to the chooser", picked == OTHER)
+    own = {type(o.start((1920, 1080))).__name__: getattr(o.start((1920, 1080)), "own_buttons", False)
+           for e in GAMES for o in e.options}
+    passed &= check("every game ends with them - but the duels, which have REMATCH",
+                    {n for n, v in own.items() if v} == {"Duel", "JarRange", "QuickDraw"})
     menu.draw(overlay.blank((1920, 1080)))
 
     print("story game:")
     size = (1920, 1080)
     english = script.ENGLISH
-    offered = [name for name, _ in GAMES[3].options]
+    offered = [o.name for o in entry("Історія").options]
     passed &= check("the chooser offers the story in each language the font can draw",
                     offered == [l.name for l in script.LANGUAGES.values()
                                 if overlay.UNICODE or l.name.isascii()], ", ".join(offered))

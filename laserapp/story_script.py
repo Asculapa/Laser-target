@@ -95,6 +95,6 @@ def _language(words) -> Language:
 
 
 LANGUAGES: Dict[str, Language] = {
-    words.CODE: _language(words) for words in (story_words_en, story_words_uk)
+    words.CODE: _language(words) for words in (story_words_uk, story_words_en)
 }
 ENGLISH = LANGUAGES["en"]

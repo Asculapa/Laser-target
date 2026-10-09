@@ -57,7 +57,7 @@ def _list_windows() -> List[CameraInfo]:
         ok = cap.isOpened()
         cap.release()
         if ok:
-            found.append(CameraInfo(index=i, name=f"Camera {i}", external=True))
+            found.append(CameraInfo(index=i, name=f"Камера {i}", external=True))
     return found
 
 
@@ -113,7 +113,7 @@ def resolve_camera(spec: Optional[str]) -> Tuple[int, str]:
     if spec is not None and spec.strip().lstrip("-").isdigit():
         index = int(spec)
         match = next((c for c in cams if c.index == index), None)
-        return index, match.name if match else f"camera {index}"
+        return index, match.name if match else f"камера {index}"
     if spec and spec.lower() != "auto":
         needle = spec.lower()
         for c in cams:
@@ -122,7 +122,7 @@ def resolve_camera(spec: Optional[str]) -> Tuple[int, str]:
         raise RuntimeError(f"No camera matching {spec!r}. Available: "
                            + (", ".join(c.label for c in cams) or "none"))
     if not cams:
-        return 0, "camera 0"
+        return 0, "камера 0"
     external = [c for c in cams if c.external]
     chosen = external[0] if external else cams[0]
     return chosen.index, chosen.name
@@ -268,10 +268,16 @@ class Camera:
         self._gen = 0               # bumped to retire a hung grabber thread
         self._beat = time.perf_counter()
         self.reopens = 0
+        self._lost_at: Optional[float] = None   # when it stopped opening at all
         self._thread = threading.Thread(target=self._loop, args=(0, cap), daemon=True)
         self._thread.start()
 
     def _open(self, index: int) -> Optional[cv2.VideoCapture]:
+        # An unplugged camera has no device node. Asking OpenCV anyway makes
+        # every backend in turn - V4L2, FFMPEG, obsensor - print a warning,
+        # once a second for as long as the camera is away.
+        if not IS_WINDOWS and not os.path.exists(f"/dev/video{index}"):
+            return None
         cap = cv2.VideoCapture(index, self.backend)
         if not cap.isOpened():  # fall back to whatever backend is available
             cap.release()
@@ -335,6 +341,12 @@ class Camera:
         """True while a camera that was delivering frames has gone quiet."""
         return (self._frame is not None
                 and time.perf_counter() - self._stamp > self.STALL_AFTER)
+
+    @property
+    def lost(self) -> float:
+        """Seconds the camera has been impossible to open - unplugged, most
+        likely - or 0 while it opens."""
+        return 0.0 if self._lost_at is None else time.perf_counter() - self._lost_at
 
     @property
     def age(self) -> float:
@@ -404,8 +416,11 @@ class Camera:
             if cap is None:
                 cap = self._reopen()
                 if cap is None:
+                    if self._lost_at is None:
+                        self._lost_at = time.perf_counter()
                     self._stop.wait(self.RETRY_EVERY)
                     continue
+                self._lost_at = None
                 with self._cap_lock:
                     if gen != self._gen:
                         break

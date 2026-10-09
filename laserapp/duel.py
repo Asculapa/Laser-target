@@ -138,7 +138,7 @@ class Lane(Round):
             self.stats.decoys += 1
             self.stats.score -= self.PENALTY
             self.shots.append(Shot(self._at[0], self._at[1], now, -self.PENALTY,
-                                   f"UNARMED -{self.PENALTY}", False))
+                                   f"БЕЗЗБРОЙНИЙ -{self.PENALTY}", False))
             self.events.append("bad")
             return
         points = self._points(target, now)
@@ -156,7 +156,7 @@ class Lane(Round):
     def _miss(self, x: float, y: float, now: float) -> None:
         self.combo = 0
         self.stats.misses += 1
-        self.shots.append(Shot(x, y, now, 0, "miss", False))
+        self.shots.append(Shot(x, y, now, 0, "мимо", False))
         self.events.append("miss")
 
     # -- main update --------------------------------------------------------
@@ -164,22 +164,28 @@ class Lane(Round):
         while self._next < len(self.plan) and self.plan[self._next].at <= self.elapsed:
             p = self.plan[self._next]
             self._next += 1
-            x, foot, height = self.stations[p.station]
-            self.targets.append(Figure(
-                x=x, y=foot - height / 2, radius=height / 2,
-                born=self.started + p.at, lifetime=p.lifetime,
-                look=p.look, height=height, station=p.station))
+            self.targets.append(self._arrive(p))
         for t in list(self.targets):
             if t.dying is not None:
                 if now - t.dying > self.DROP:
                     self.targets.remove(t)
             elif t.age(now) >= t.lifetime:
                 t.dying = now
-                if art.LOOKS[t.look].foe:    # an armed one nobody shot
-                    self.stats.escaped += 1
-                    self.combo = 0
+                self._expired(t)
         self._at = point
         self._aim(now, dt, point)
+
+    def _arrive(self, p: Popup) -> Target:
+        x, foot, height = self.stations[p.station]
+        return Figure(x=x, y=foot - height / 2, radius=height / 2,
+                      born=self.started + p.at, lifetime=p.lifetime,
+                      look=p.look, height=height, station=p.station)
+
+    def _expired(self, t: Figure) -> None:
+        """`t` has gone down unshot."""
+        if art.LOOKS[t.look].foe:            # an armed one nobody shot
+            self.stats.escaped += 1
+            self.combo = 0
 
     # -- drawing ------------------------------------------------------------
     def draw_field(self, canvas) -> None:
@@ -230,11 +236,16 @@ class Duel(Round):
     whoever has the higher score when time is called has won."""
 
     DURATION = 60.0
-    HINT = "player 1 left, player 2 right - shoot the armed, spare the rest"
+    HINT = "гравець 1 ліворуч, гравець 2 праворуч — стріляй в озброєних, решту не чіпай"
     players = 2
-    PLAYERS = (("PLAYER 1", overlay.CYAN), ("PLAYER 2", overlay.YELLOW))
+    own_buttons = True       # REMATCH, held with either laser
+    PLAYERS = (("ГРАВЕЦЬ 1", overlay.CYAN), ("ГРАВЕЦЬ 2", overlay.YELLOW))
     SETTLE = 1.5             # the rematch button ignores the pointer this long:
                              # at the last second both players are still shooting
+    LANE = Lane              # what a game on the same split screen changes
+    SOUNDS = ASSETS
+    TUNE: Optional[str] = MUSIC
+    WINS = "виграно раундів"
 
     def __init__(self, screen_size: Tuple[int, int], duration: float = DURATION,
                  seed: Optional[int] = None) -> None:
@@ -244,7 +255,7 @@ class Duel(Round):
         self.plan: List[Popup] = []
         self.wins = [0, 0]                   # rounds won since the duel was chosen
         self.winner: Optional[int] = None    # of the round just played; None is a draw
-        self.sound = sound.Player(ASSETS)
+        self.sound = sound.Player(self.SOUNDS)
         self._settled = False
         self._over_at = 0.0
         self._hold = Hold()                  # on the rematch button
@@ -254,7 +265,7 @@ class Duel(Round):
         super().start(now)
         w = self.screen_size[0]
         self.plan = self._plan()
-        self.lanes = [Lane(self.screen_size, span, self.plan, name, colour)
+        self.lanes = [self.LANE(self.screen_size, span, self.plan, name, colour)
                       for span, (name, colour) in zip(((0, w // 2), (w // 2, w)), self.PLAYERS)]
         for lane in self.lanes:
             lane.start(now)
@@ -332,8 +343,8 @@ class Duel(Round):
             for lane in self.lanes:
                 lane.update(now, lane.mine(seen))
         super().update(now, point)
-        if self.state == PLAYING:
-            self.sound.music(MUSIC)
+        if self.state == PLAYING and self.TUNE:
+            self.sound.music(self.TUNE)
         elif self.state == OVER and not self._settled:
             self._settle()
         elif self.state == OVER and now - self._over_at >= self.SETTLE:
@@ -384,11 +395,9 @@ class Duel(Round):
         ahead = max(lane.score for lane in self.lanes)
         tied = all(lane.score == ahead for lane in self.lanes)
         for i, lane in enumerate(self.lanes):
-            s = lane.stats
             rows = [(lane.name, 0.75 * k, 2, int(40 * k)),
                     (str(lane.score), 1.7 * k, 3, int(98 * k)),
-                    (f"{s.hits} down   {s.decoys} unarmed shot"
-                     + (f"   x{lane.multiplier:.1f}" if lane.combo > 1 else ""),
+                    (self._tally(lane) + (f"   x{lane.multiplier:.1f}" if lane.combo > 1 else ""),
                      0.6 * k, 1, int(130 * k))]
             for n, (words, scale, thick, y) in enumerate(rows):
                 (tw, _), _ = cv2.getTextSize(words, overlay.FONT, scale, thick)
@@ -400,24 +409,39 @@ class Duel(Round):
                     cv2.line(canvas, (x, y + int(10 * k)), (x + tw, y + int(10 * k)),
                              overlay.GREEN, max(2, int(4 * k)), cv2.LINE_AA)
 
+    def _tally(self, lane: Lane) -> str:
+        """A player's count so far, under the score."""
+        return f"збито: {lane.stats.hits}   беззбройних: {lane.stats.decoys}"
+
+    def _summary(self, lane: Lane) -> str:
+        """A player's line in the panel at the end."""
+        s = lane.stats
+        return (f"{lane.name}    збито: {s.hits}    беззбройних: {s.decoys}    "
+                f"утекли: {s.escaped}    влучність {lane.accuracy:.0%}    "
+                f"реакція {s.reaction:.2f} с")
+
     def rematch_box(self) -> Tuple[int, int, int, int]:
         w, h = self.screen_size
         return int(w * 0.38), int(h * 0.70), int(w * 0.62), int(h * 0.82)
 
+    def draw_pointer(self, canvas, x: float, y: float, t: float,
+                     crosshair: bool = False) -> None:
+        """A gun sight in the colour of the lane it is in."""
+        lane = self.lanes[int(x >= self.screen_size[0] / 2)]
+        overlay.draw_sight(canvas, x, y, lane.colour, self.screen_size[1] / 1080.0,
+                           self._kick(lane.shots))
+
     def draw_over(self, canvas, scores: Optional[HighScores], rank: Optional[int]) -> None:
         a, b = self.lanes
         if self.winner is None:
-            head = ("DRAW", 1.8, overlay.WHITE, 3)
+            head = ("НІЧИЯ", 1.8, overlay.WHITE, 3)
         else:
             lane = self.lanes[self.winner]
-            head = (f"{lane.name} WINS", 1.8, lane.colour, 3)
+            head = (f"ПЕРЕМАГАЄ {lane.name}", 1.8, lane.colour, 3)
         lines = [head, (f"{a.score}  :  {b.score}", 1.6, overlay.WHITE, 3)]
         for lane in self.lanes:
-            s = lane.stats
-            lines.append((f"{lane.name}    {s.hits} down    {s.decoys} unarmed shot    "
-                          f"{s.escaped} got away    accuracy {lane.accuracy:.0%}    "
-                          f"reaction {s.reaction:.2f}s", 0.7, lane.colour, 1))
-        lines.append((f"rounds won    {self.wins[0]} : {self.wins[1]}", 0.9, overlay.GREEN, 2))
+            lines.append((self._summary(lane), 0.7, lane.colour, 1))
+        lines.append((f"{self.WINS}    {self.wins[0]} : {self.wins[1]}", 0.9, overlay.GREEN, 2))
         overlay.draw_panel(canvas, lines, self.screen_size[1] * 0.40)
 
         x0, y0, x1, y1 = self.rematch_box()
@@ -426,11 +450,11 @@ class Duel(Round):
         cv2.rectangle(canvas, (x0, y0), (x1, y1), (60, 50, 20) if hot else (24, 24, 24), -1)
         cv2.rectangle(canvas, (x0, y0), (x1, y1), overlay.CYAN if hot else overlay.GREY,
                       2 if hot else 1)
-        overlay.text_fit(canvas, "REMATCH", ((x0 + x1) // 2, (y0 + y1) // 2),
+        overlay.text_fit(canvas, "РЕВАНШ", ((x0 + x1) // 2, (y0 + y1) // 2),
                          (x1 - x0) * 0.8, (y1 - y0) * 0.36, overlay.WHITE, 2)
         if hot:
             cv2.rectangle(canvas, (x0, y1 - 8), (x0 + int((x1 - x0) * fill), y1),
                           overlay.GREEN, -1)
-        overlay.text_centered(canvas, "hold a laser on the button, or press G"
-                                      "      ESC back to tracking",
+        overlay.text_centered(canvas, "затримай лазер на кнопці або натисни G"
+                                      "      ESC — вихід",
                               int(self.screen_size[1] * 0.87), 0.7, overlay.GREY)

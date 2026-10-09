@@ -26,7 +26,7 @@ import numpy as np
 from . import overlay, sound
 from . import story_art as art
 from . import story_script as script
-from .game import OVER, PAUSED, PLAYING, HighScores, Round
+from .game import OVER, PAUSED, PLAYING, HighScores, Hold, Round
 from .mathgames import _star
 from .story_levels import Chapter, Constellations, Ships, Siege, Sparks, Storm
 
@@ -89,45 +89,6 @@ class Progress:
             pass
 
 
-class Hold:
-    """Buttons pressed by resting the pointer on one, as in the game chooser."""
-
-    DWELL = 0.9
-    GRACE = 0.35             # the hold survives losing the dot for this long
-
-    def __init__(self) -> None:
-        self.over: Optional[int] = None
-        self.dwell = 0.0
-        self._away = 0.0
-
-    def reset(self) -> None:
-        self.over, self.dwell, self._away = None, 0.0, 0.0
-
-    def update(self, dt: float, point: Optional[Tuple[float, float]],
-               boxes: Sequence[Box]) -> Optional[int]:
-        """The button whose hold has just completed, if any."""
-        at = None
-        if point is not None:
-            at = next((i for i, (x0, y0, x1, y1) in enumerate(boxes)
-                       if x0 <= point[0] <= x1 and y0 <= point[1] <= y1), None)
-        if at is None:
-            self._away += dt
-            if self._away > self.GRACE:
-                self.reset()
-            return None
-        if at != self.over:
-            self.over, self.dwell = at, 0.0
-        self._away = 0.0
-        self.dwell += dt
-        if self.dwell >= self.DWELL:
-            self.reset()
-            return at
-        return None
-
-    def fill(self, i: int) -> float:
-        return min(1.0, self.dwell / self.DWELL) if i == self.over else 0.0
-
-
 class Story(Round):
     COUNTDOWN = 0.0
     LINE_GAP = 0.7           # the pause after a line, before the next
@@ -138,7 +99,7 @@ class Story(Round):
     RETRY_TIME = 7.0
 
     def __init__(self, screen_size: Tuple[int, int], seed: Optional[int] = None,
-                 levels: Sequence[type] = LEVELS, language: str = "en") -> None:
+                 levels: Sequence[type] = LEVELS, language: str = "uk") -> None:
         super().__init__(screen_size, seed)
         self.levels = tuple(levels)
         self.words = script.LANGUAGES[language]
@@ -418,6 +379,11 @@ class Story(Round):
         return self.words.say("chapter", n=self.chapter + 1,
                               title=self.words.chapters[self.chapter].title)
 
+    def draw_pointer(self, canvas, x: float, y: float, t: float,
+                     crosshair: bool = False) -> None:
+        # The keeper's beam: a spot of the lamp's light, not a gun sight.
+        overlay.draw_glow(canvas, x, y, art.SPARK, self.screen_size[1] / 1080.0, t)
+
     def _draw_button(self, canvas, box: Box, label: str, fill: float,
                      small: bool = False) -> None:
         x0, y0, x1, y1 = box
@@ -426,7 +392,7 @@ class Story(Round):
         cv2.rectangle(canvas, (x0, y0), (x1, y1), overlay.CYAN if hot else overlay.GREY,
                       2 if hot else 1)
         overlay.text_fit(canvas, label, ((x0 + x1) // 2, (y0 + y1) // 2),
-                         (x1 - x0) * 0.8, (y1 - y0) * (0.3 if small else 0.36),
+                         (x1 - x0) * 0.7, (y1 - y0) * (0.3 if small else 0.36),
                          overlay.GREY if small and not hot else overlay.WHITE, 2)
         if hot:
             cv2.rectangle(canvas, (x0, y1 - 8), (x0 + int((x1 - x0) * fill), y1), overlay.GREEN, -1)

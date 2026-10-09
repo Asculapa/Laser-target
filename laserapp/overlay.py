@@ -28,7 +28,8 @@ GREY = (140, 140, 118)
 DIM = (70, 70, 60)
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 # From OpenCV 5 on, putText draws with a real font that has more than ASCII
-# in it - Cyrillic, for one. Before that, anything else came out as "???".
+# in it - Cyrillic, for one. Before that, anything else came out as "???",
+# which is why the Ukrainian interface needs opencv-python 5 or later.
 UNICODE = int(cv2.__version__.split(".")[0]) >= 5
 
 
@@ -69,6 +70,88 @@ def draw_target(img, x: float, y: float, t: float, strength: float = 1.0,
         cv2.line(img, p0, p1, c, 2, cv2.LINE_AA)
 
     cv2.circle(img, (ix, iy), 3, tuple(int(v * strength) for v in WHITE), -1, cv2.LINE_AA)
+
+
+# -- the games' pointers ------------------------------------------------------
+# Each drawn twice: dark and a little wider first, then in colour, so that it
+# stands out on a bright picture as well as on a dark one. `kick` (0-1) is how
+# lately the gun went off.
+
+def _crosshair(img, x: float, y: float, colour) -> None:
+    h, w = img.shape[:2]
+    faint = tuple(int(v * 0.2) for v in colour)
+    cv2.line(img, (0, int(y)), (w, int(y)), faint, 1, cv2.LINE_AA)
+    cv2.line(img, (int(x), 0), (int(x), h), faint, 1, cv2.LINE_AA)
+
+
+def draw_sight(img, x: float, y: float, colour, k: float = 1.0, kick: float = 0.0,
+               crosshair: bool = False) -> None:
+    """A gun sight: a ring, four posts that leave the middle clear to see
+    the target through, and a bead. Kicks open, with a flash, as it fires."""
+    if crosshair:
+        _crosshair(img, x, y, colour)
+    r = 30 * k * (1.0 + 0.45 * kick)
+    c = (int(x), int(y))
+    posts = [((int(x + dx * r * 0.42), int(y + dy * r * 0.42)),
+              (int(x + dx * r * 1.55), int(y + dy * r * 1.55)))
+             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))]
+    for pen, extra in (((0, 0, 0), 2), (colour, 0)):
+        cv2.circle(img, c, int(r), pen, 2 + extra, cv2.LINE_AA)
+        for p0, p1 in posts:
+            cv2.line(img, p0, p1, pen, 2 + extra, cv2.LINE_AA)
+        cv2.circle(img, c, max(2, int(3 * k)) + extra // 2, pen, -1, cv2.LINE_AA)
+    if kick > 0:
+        flash = tuple(int(v * kick) for v in colour)
+        for i in range(8):
+            a = math.pi / 8 + i * math.pi / 4
+            cv2.line(img, (int(x + math.cos(a) * r * 1.15), int(y + math.sin(a) * r * 1.15)),
+                     (int(x + math.cos(a) * r * 1.6), int(y + math.sin(a) * r * 1.6)),
+                     flash, 2, cv2.LINE_AA)
+
+
+def draw_scope(img, x: float, y: float, colour, k: float = 1.0, kick: float = 0.0,
+               crosshair: bool = False) -> None:
+    """A rifle scope, for the ranges: a fine cross through a ring, heavy
+    posts on the ring's outside, ticks to judge by, and recoil on a shot."""
+    if crosshair:
+        _crosshair(img, x, y, colour)
+    y = y - 10 * k * kick                          # the muzzle climbs, and settles
+    r = 44 * k
+    c = (int(x), int(y))
+    for pen, extra in (((0, 0, 0), 2), (colour, 0)):
+        cv2.circle(img, c, int(r), pen, 2 + extra, cv2.LINE_AA)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            # thin inside the ring, thick outside it
+            cv2.line(img, (int(x + dx * r * 0.12), int(y + dy * r * 0.12)),
+                     (int(x + dx * r), int(y + dy * r)), pen, 1 + extra, cv2.LINE_AA)
+            cv2.line(img, (int(x + dx * r * 0.7), int(y + dy * r * 0.7)),
+                     (int(x + dx * r * 1.35), int(y + dy * r * 1.35)), pen, 3 + extra, cv2.LINE_AA)
+            for m in (0.33, 0.55):                 # the ticks
+                px, py = x + dx * r * m, y + dy * r * m
+                cv2.line(img, (int(px - dy * 4 * k), int(py - dx * 4 * k)),
+                         (int(px + dy * 4 * k), int(py + dx * 4 * k)), pen, 1 + extra, cv2.LINE_AA)
+    if kick > 0:
+        cv2.circle(img, c, int(r * (1.1 + 0.5 * (1 - kick))),
+                   tuple(int(v * kick * 0.8) for v in colour), 2, cv2.LINE_AA)
+
+
+def draw_glow(img, x: float, y: float, colour, k: float = 1.0, t: float = 0.0) -> None:
+    """A soft spot of light, for the games that are not about shooting:
+    a balloon is picked, a lamp is lit, nothing is fired at."""
+    breathe = 1.0 + 0.08 * math.sin(t * 4.0)
+    h, w = img.shape[:2]
+    r = int(60 * k * breathe)
+    x0, y0, x1, y1 = max(0, int(x) - r), max(0, int(y) - r), min(w, int(x) + r), min(h, int(y) + r)
+    if x1 > x0 and y1 > y0:
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        d = np.sqrt((xx - x) ** 2 + (yy - y) ** 2) / r
+        a = np.clip(1.0 - d, 0.0, 1.0) ** 1.4 * 0.85
+        roi = img[y0:y1, x0:x1].astype(np.float32)
+        roi += (np.array(colour, np.float32) - roi) * a[..., None]
+        img[y0:y1, x0:x1] = roi.astype(np.uint8)
+    cv2.circle(img, (int(x), int(y)), int(13 * k * breathe), (0, 0, 0), 4, cv2.LINE_AA)
+    cv2.circle(img, (int(x), int(y)), int(13 * k * breathe), colour, 2, cv2.LINE_AA)
+    cv2.circle(img, (int(x), int(y)), max(3, int(5 * k)), WHITE, -1, cv2.LINE_AA)
 
 
 def draw_marker(img, x: float, y: float, progress: float, t: float) -> None:
@@ -208,12 +291,12 @@ def draw_preview(img, frame: np.ndarray, mask: Optional[np.ndarray],
     cv2.addWeighted(panel, 0.88, region, 0.12, 0, region)
     cv2.rectangle(img, (x0 - 1, y0 - 1), (x0 + pw, y0 + ph), GREY, 1)
 
-    label = camera_label or "camera"
+    label = camera_label or "камера"
     if mode == 1:
-        label += "  /  detector mask"
+        label += "  /  маска детектора"
     text(img, label, (x0 + 8, y0 + 20), 0.5, YELLOW)
     if quad is None:
-        text(img, "not calibrated - aim the camera so the whole screen is in view",
+        text(img, "не відкалібровано — наведи камеру так, щоб було видно весь екран",
              (x0 + 8, y0 + ph - 12), 0.45, YELLOW)
 
 
@@ -226,10 +309,10 @@ def draw_camera_picker(img, cams, highlight: int, current: Optional[int],
     Returns [(x0, y0, x1, y1), ...] - one clickable box per list entry.
     """
     h, w = img.shape[:2]
-    text(img, "Choose a camera", (60, 90), 1.2, CYAN, 2)
-    hint = "1-9 or click to preview    ENTER or click again to use it    N next"
+    text(img, "Обери камеру", (60, 90), 1.2, CYAN, 2)
+    hint = "1–9 або клік — переглянути    ENTER або ще клік — вибрати    N — наступна"
     if can_cancel:
-        hint += "    ESC back"
+        hint += "    ESC — назад"
     text(img, hint, (60, 130), 0.6, GREY)
 
     boxes = []
@@ -248,15 +331,15 @@ def draw_camera_picker(img, cams, highlight: int, current: Optional[int],
         text(img, name, (100, y), 0.7, WHITE if chosen else GREY, 2 if chosen else 1)
         tags = []
         if not cam.external:
-            tags.append("built-in")
+            tags.append("вбудована")
         if cam.index == current:
-            tags.append("in use")
+            tags.append("зараз працює")
         if tags:
             (tw, _), _ = cv2.getTextSize(name, FONT, 0.7, 2 if chosen else 1)
             text(img, "  (" + ", ".join(tags) + ")", (100 + tw, y), 0.55, GREY)
         y += 60
     if not cams:
-        text(img, "no cameras found - plug one in and press N to rescan",
+        text(img, "камер не знайдено — під'єднай камеру й натисни N, щоб пошукати знову",
              (60, y), 0.7, YELLOW)
 
     # Live view of the highlighted camera.
@@ -275,41 +358,42 @@ def draw_camera_picker(img, cams, highlight: int, current: Optional[int],
             cv2.rectangle(img, (px0 - 1, py0 - 1), (px0 + pw, py0 + ph), GREY, 1)
             text(img, f"{fw}x{fh}", (px0 + 8, py0 + 22), 0.5, YELLOW)
         else:
-            text(img, message or "opening camera...", (px0, py0 + 40), 0.7, YELLOW)
+            text(img, message or "відкриваю камеру...", (px0, py0 + 40), 0.7, YELLOW)
     if frame is not None and message:
         text(img, message, (60, h - 50), 0.65, YELLOW)
     return boxes
 
 
 HELP_LINES = [
-    ("G", "games              P  pause"),
-    ("M", "use the mouse as the pointer"),
-    ("K", "calibrate automatically (no laser needed)"),
-    ("C", "calibrate with the laser"),
-    ("SPACE", "capture point manually (during calibration)"),
-    ("B", "back one point (during calibration)"),
-    ("ESC", "cancel calibration"),
-    ("F", "ignore what is on screen now (point laser away first)"),
-    ("D", "camera preview: wide / with mask / off"),
-    ("V", "choose camera     N  next camera"),
-    ("U", "lens correction on/off"),
-    ("T", "trail on/off      X  crosshair on/off"),
-    ("[ ]", "sensitivity -/+"),
-    (", .", "redness floor -/+"),
-    ("E / R", "exposure darker / brighter    A  auto-exposure"),
-    ("S", "save settings      H  this help      Q  quit"),
+    ("G", "ігри              P  пауза"),
+    ("M", "миша замість лазера"),
+    ("K", "автокалібрування (лазер не потрібен)"),
+    ("C", "калібрування лазером"),
+    ("SPACE", "зафіксувати точку вручну (під час калібрування)"),
+    ("B", "на точку назад (під час калібрування)"),
+    ("ESC", "скасувати калібрування"),
+    ("F", "не зважати на те, що зараз на екрані (спершу відведи лазер)"),
+    ("D", "перегляд камери: широкий / з маскою / вимк."),
+    ("V", "вибір камери     N  наступна камера"),
+    ("U", "корекція об'єктива увімк./вимк."),
+    ("T", "слід увімк./вимк.      X  перехрестя увімк./вимк."),
+    ("[ ]", "чутливість -/+"),
+    (", .", "поріг червоного -/+"),
+    ("E / R", "експозиція: темніше / світліше    A  автоекспозиція"),
+    ("S", "зберегти налаштування      H  ця довідка      Q  вихід"),
 ]
 
 
 def draw_help(img) -> None:
     h, w = img.shape[:2]
-    bw, bh = 560, 40 + 28 * len(HELP_LINES)
+    widest = max(cv2.getTextSize(desc, FONT, 0.55, 1)[0][0] for _, desc in HELP_LINES)
+    bw, bh = 110 + widest + 30, 40 + 28 * len(HELP_LINES)
     x0, y0 = (w - bw) // 2, (h - bh) // 2
     overlay = img.copy()
     cv2.rectangle(overlay, (x0, y0), (x0 + bw, y0 + bh), (25, 25, 25), -1)
     cv2.addWeighted(overlay, 0.85, img, 0.15, 0, img)
     cv2.rectangle(img, (x0, y0), (x0 + bw, y0 + bh), CYAN, 1)
-    text(img, "Laser Target - keys", (x0 + 20, y0 + 28), 0.7, CYAN)
+    text(img, "Лазерний тир — клавіші", (x0 + 20, y0 + 28), 0.7, CYAN)
     for i, (key, desc) in enumerate(HELP_LINES):
         y = y0 + 58 + i * 28
         text(img, key.ljust(7), (x0 + 24, y), 0.55, YELLOW)

@@ -254,7 +254,7 @@ class CalibrationSession:
         self.captured: List[Tuple[float, float]] = []
         self.samples: Deque[Tuple[float, float]] = deque(maxlen=self.HOLD_SAMPLES)
         self.cooldown_until = time.time() + self.SETTLE
-        self.message = "Point the laser at the marker and hold still"
+        self.message = "Наведи лазер на мітку й тримай нерухомо"
         self.result: Optional[Calibration] = None
         self.unmoved = False      # the laser is still where the last point was taken
         self._seen_seq: Optional[int] = None
@@ -335,13 +335,13 @@ class CalibrationSession:
                                 self.camera_size, self.screen_size,
                                 lens=self.lens, lens_model=self.lens_model)
             r = self.result
-            extra = f", {r.dropped} point(s) discarded" if r.dropped else ""
+            extra = f", відкинуто точок: {r.dropped}" if r.dropped else ""
             if r.lens is not None:
-                self.message = (f"Calibrated - {r.error:.1f} px "
-                                f"(lens k1={r.lens.k1:+.2f} k2={r.lens.k2:+.2f}; "
-                                f"{r.error_no_lens:.1f} px uncorrected{extra})")
+                self.message = (f"Відкалібровано — {r.error:.1f} пкс "
+                                f"(об'єктив k1={r.lens.k1:+.2f} k2={r.lens.k2:+.2f}; "
+                                f"без корекції {r.error_no_lens:.1f} пкс{extra})")
             else:
-                self.message = f"Calibrated - mean error {r.error:.1f} px{extra}"
+                self.message = f"Відкалібровано — середня похибка {r.error:.1f} пкс{extra}"
         except Exception as exc:  # degenerate point set
             self.result = None
-            self.message = f"Calibration failed: {exc}"
+            self.message = f"Калібрування не вдалося: {exc}"

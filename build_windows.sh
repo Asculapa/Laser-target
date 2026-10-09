@@ -26,10 +26,12 @@ unzip -q "$embed" -d "$OUT/python"
 
 # Windows wheels, whatever platform this runs on. pygrabber gives the
 # camera chooser real device names; comtypes is what it talks DirectShow with.
+# sounddevice (with PortAudio inside its wheel) mixes the effects, so that
+# shots overlap instead of cutting each other off in winsound.
 wheels="$CACHE/wheels-$PYTAG"
 "$PY" -m pip download -q --only-binary=:all: --platform win_amd64 \
     --python-version "$PYTAG" --implementation cp -d "$wheels" \
-    "opencv-python>=4.8" "numpy>=1.24" pygrabber comtypes
+    "opencv-python>=5.0" "numpy>=1.24" pygrabber comtypes sounddevice
 site="$OUT/python/Lib/site-packages"
 mkdir -p "$site"
 for w in "$wheels"/*.whl; do unzip -q -o "$w" -d "$site"; done

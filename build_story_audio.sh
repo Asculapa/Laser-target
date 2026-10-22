@@ -10,11 +10,14 @@
 #   ./build_story_audio.sh uk              # one language
 #   ./build_story_audio.sh uk --force      # all of it again
 #   ./build_story_audio.sh uk --only c1i03,c2f
+#   ./build_story_audio.sh west            # the Wild West's announcer: OmniVoice, from a
+#                                          # VoiceStudio checkout ($VOICESTUDIO, default
+#                                          # ~/prj/VoiceStudio; ~2.4 GB of weights, CC-BY-NC)
 set -euo pipefail
 cd "$(dirname "$0")"
 
 langs="en uk"
-case "${1:-}" in en|uk) langs=$1; shift ;; esac
+case "${1:-}" in en|uk|west) langs=$1; shift ;; esac
 
 venv() {    # venv DIR - this system's Python ships without pip (see README)
     if [ ! -x "$1/venv/bin/pip" ]; then
@@ -25,7 +28,16 @@ venv() {    # venv DIR - this system's Python ships without pip (see README)
 }
 
 for lang in $langs; do
-    if [ "$lang" = en ]; then
+    if [ "$lang" = west ]; then
+        cache=.build-cache/tts-omni
+        venv "$cache"
+        if ! "$cache/venv/bin/python" -c 'import torch, transformers, soundfile' 2>/dev/null; then
+            "$cache/venv/bin/pip" install -q --index-url https://download.pytorch.org/whl/cpu \
+                torch torchaudio
+            "$cache/venv/bin/pip" install -q "transformers>=5.10" accelerate pydub soundfile numpy
+        fi
+        "$cache/venv/bin/python" -W ignore tools/west_voice.py "$@"
+    elif [ "$lang" = en ]; then
         cache=.build-cache/tts
         release=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
         venv "$cache"

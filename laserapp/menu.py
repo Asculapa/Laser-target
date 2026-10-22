@@ -16,6 +16,7 @@ from .story import Hold, Story
 from .story_script import LANGUAGES
 from .teacher import TeacherSettings
 from .west import West
+from .west_training import WestTraining
 
 Factory = Callable[[Tuple[int, int]], Round]
 SHOOTING, LEARNING = "Стрільба", "Навчальні ігри"
@@ -52,7 +53,8 @@ GAMES = [
         Option(name, lambda size, n=n, level=level: West(size, players=n, level=level),
                note, "1 гравець" if n == 1 else f"{n} гравці")
         for n in (1, 2) for level, name, note in WEST_LEVELS
-    ]),
+    ] + [Option("Навчання", lambda size: WestTraining(size), "4 короткі уроки, без життів",
+                "для початку")]),
     Entry("Дуель у тирі", "двоє гравців, 8–9 класи", SHOOTING, [
         Option("дуель", lambda size: Duel(size)),
     ]),
@@ -93,6 +95,7 @@ class GameMenu:
 
     def __init__(self, screen_size: Tuple[int, int]) -> None:
         self.screen_size = screen_size
+        self.mouse = False                   # the pointer is the mouse: say "click"
         self.page: Optional[int] = None      # None: the games; N: options of game N
         self.now = 0.0
         self._hover: Optional[int] = None
@@ -178,6 +181,14 @@ class GameMenu:
         self._reset()
         return True
 
+    def click(self, point: Tuple[float, float]) -> Optional[Factory]:
+        """A mouse click on a tile picks it at once; no hold needed."""
+        boxes = self.boxes()
+        for i, (x0, y0, x1, y1) in enumerate(boxes):
+            if x0 <= point[0] <= x1 and y0 <= point[1] <= y1:
+                return self.choose(i)
+        return None
+
     def _reset(self) -> None:
         self._hover, self._other, self._dwell, self._since = None, None, 0.0, self.now
 
@@ -262,8 +273,10 @@ class GameMenu:
                 fill = int((x1 - x0) * min(1.0, self._dwell / self.DWELL))
                 cv2.rectangle(canvas, (x0, y1 - 10), (x0 + fill, y1), overlay.GREEN, -1)
         overlay.text_centered(
-            canvas, f"затримай лазер на картці або натисни 1–{len(self._items())}"
-                    "      ESC — назад", int(h * 0.92), 0.7 * k, overlay.GREY)
+            canvas, (f"клацни картку або натисни 1–{len(self._items())}"
+                     "      M — грати лазером      ESC — назад") if self.mouse else
+                    (f"затримай лазер на картці або натисни 1–{len(self._items())}"
+                     "      M — грати мишею      ESC — назад"), int(h * 0.92), 0.7 * k, overlay.GREY)
 
 
 AGAIN, OTHER = "again", "other"
@@ -277,8 +290,9 @@ class EndButtons:
     SETTLE = 1.5         # the buttons ignore the pointer this long: when a game
                          # ends, the players are still shooting
 
-    def __init__(self, screen_size: Tuple[int, int], now: float) -> None:
+    def __init__(self, screen_size: Tuple[int, int], now: float, mouse: bool = False) -> None:
         self.screen_size = screen_size
+        self.mouse = mouse
         self.since = now
         self.now = now
         self._hold = Hold()
@@ -289,6 +303,15 @@ class EndButtons:
         y0 = int(h * 0.84)
         return [(int(w * 0.04), y0, int(w * 0.04) + bw, y0 + bh),
                 (w - int(w * 0.04) - bw, y0, w - int(w * 0.04), y0 + bh)]
+
+    def click(self, point: Tuple[float, float]) -> Optional[str]:
+        """AGAIN or OTHER for a mouse click on one, once they are ready."""
+        if self.now - self.since < self.SETTLE:
+            return None
+        for i, (x0, y0, x1, y1) in enumerate(self.boxes()):
+            if x0 <= point[0] <= x1 and y0 <= point[1] <= y1:
+                return (AGAIN, OTHER)[i]
+        return None
 
     def update(self, now: float, points) -> Optional[str]:
         """AGAIN or OTHER once a hold on one completes, else None. Any of
@@ -320,7 +343,7 @@ class EndButtons:
             overlay.text_fit(canvas, words, ((x0 + x1) // 2, y0 + int(bh * 0.36)),
                              (x1 - x0) * 0.72, bh * 0.30,
                              overlay.WHITE if ready else overlay.DIM, 2)
-            overlay.text_fit(canvas, "затримай лазер тут", ((x0 + x1) // 2, y0 + int(bh * 0.70)),
+            overlay.text_fit(canvas, "клацни тут" if self.mouse else "затримай лазер тут", ((x0 + x1) // 2, y0 + int(bh * 0.70)),
                              (x1 - x0) * 0.66, bh * 0.13,
                              overlay.GREY if ready else overlay.DIM, 1)
             if hot:

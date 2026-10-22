@@ -302,11 +302,12 @@ def draw_preview(img, frame: np.ndarray, mask: Optional[np.ndarray],
 
 def draw_camera_picker(img, cams, highlight: int, current: Optional[int],
                        frame: Optional[np.ndarray], message: str = "",
-                       can_cancel: bool = True) -> list:
+                       can_cancel: bool = True, mouse: bool = False) -> list:
     """Full-screen camera chooser: a list on the left, a live greyscale view
     of the highlighted camera on the right.
 
-    Returns [(x0, y0, x1, y1), ...] - one clickable box per list entry.
+    Returns [(x0, y0, x1, y1), ...] - one clickable box per list entry, and
+    with `mouse` one more after them: play with the mouse, no camera at all.
     """
     h, w = img.shape[:2]
     text(img, "Обери камеру", (60, 90), 1.2, CYAN, 2)
@@ -341,6 +342,15 @@ def draw_camera_picker(img, cams, highlight: int, current: Optional[int],
     if not cams:
         text(img, "камер не знайдено — під'єднай камеру й натисни N, щоб пошукати знову",
              (60, y), 0.7, YELLOW)
+        y += 60
+    if mouse:
+        y += 30
+        box = (50, y - 34, 50 + list_w, y + 26)
+        boxes.append(box)
+        cv2.rectangle(img, box[:2], box[2:], (24, 24, 24), -1)
+        cv2.rectangle(img, box[:2], box[2:], GREEN, 1)
+        text(img, "M", (64, y + 4), 0.8, YELLOW, 2)
+        text(img, "Грати мишею — без камери і лазера", (100, y + 4), 0.7, WHITE, 2)
 
     # Live view of the highlighted camera.
     px0, py0 = 60 + list_w + 40, 170

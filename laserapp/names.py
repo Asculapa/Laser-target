@@ -42,8 +42,9 @@ class NameEntry:
                              # ended, and the players are still shooting
 
     def __init__(self, screen_size: Tuple[int, int], now: float, title: str,
-                 last: str = "") -> None:
+                 last: str = "", mouse: bool = False) -> None:
         self.screen_size = screen_size
+        self.mouse = mouse
         self.title = title
         self.last = last                 # the name typed last time, offered as one key
         self.name = ""
@@ -101,6 +102,15 @@ class NameEntry:
             first = not self.name or self.name[-1] in " -'"
             self.name += letter.upper() if first else letter.lower()
 
+    def click(self, point: Tuple[float, float]) -> None:
+        """A mouse click types the key under it at once."""
+        if self.now - self.since < self.SETTLE or self.result is not None:
+            return
+        for key, (x0, y0, x1, y1) in zip(self._keys, self._boxes):
+            if x0 <= point[0] <= x1 and y0 <= point[1] <= y1:
+                self.press(key)
+                return
+
     def key(self, code: int) -> bool:
         """A key on the computer's keyboard. True if it was taken."""
         if code in (13, 10):
@@ -136,7 +146,8 @@ class NameEntry:
         k = h / 1080.0
         canvas[:] = (canvas * 0.25).astype(canvas.dtype)
         overlay.text_centered(canvas, self.title, int(h * 0.09), 1.5 * k, overlay.GREEN, 3)
-        overlay.text_centered(canvas, "Як тебе звати? Затримай лазер на літері",
+        overlay.text_centered(canvas, "Як тебе звати? Клацай літери" if self.mouse
+                              else "Як тебе звати? Затримай лазер на літері",
                               int(h * 0.15), 0.8 * k, overlay.GREY, 1)
         # The name so far, with a cursor.
         x0, y0, x1, y1 = int(w * 0.04), int(h * 0.20), int(w * 0.58), int(h * 0.30)

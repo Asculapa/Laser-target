@@ -65,18 +65,28 @@ class LaserApp:
         self._picker_original: Optional[CameraInfo] = None
         self._pending_pick: Optional[int] = None
         self._pending_confirm = False
+        self._pending_mouse = False
+
+        # The mouse instead of a laser: asked for, or chosen last time. Then
+        # no camera is needed, and none is opened unless one is asked for.
+        self.mouse_input = args.mouse_pointer or self.settings.get("pointer") == "mouse"
+        self._click: Optional[Tuple[float, float]] = None   # a mouse click, until used
 
         # No --camera: reuse the camera picked last time if it is still
         # plugged in, otherwise let the user choose when there is a choice.
         spec = args.camera
         chosen: Optional[Tuple[int, str]] = None
-        if spec is None:
+        if spec is None and self.mouse_input:
+            self.camera_index, self.camera_name = -1, "немає"
+        elif spec is None:
             cams = list_cameras()
             remembered = next((c for c in cams if c.name == self.settings.get("camera")), None)
             if remembered:
                 chosen = remembered.index, remembered.name
             spec = "pick" if len(cams) > 1 else "auto"
-        if spec == "pick" and chosen is None:
+        if spec is None:
+            pass                                     # the mouse: no camera
+        elif spec == "pick" and chosen is None:
             self.camera_index, self.camera_name = -1, "none"
             self.open_picker(initial=True)
         else:
@@ -111,7 +121,6 @@ class LaserApp:
         self._game_rank: Optional[int] = None
         self._blind_pause = False                    # paused because the camera went blind
         self._preview_before_game = 0
-        self.mouse_input = args.mouse_pointer
         self._mouse_pos = (0, 0)
         self._mouse_down = False
         self.show_help = True
@@ -127,6 +136,9 @@ class LaserApp:
 
         if self.mode == MODE_PICK:
             pass
+        elif self.mouse_input:
+            self.open_menu()
+            self.notify("вказівник: миша — клацай або тримай ліву кнопку;  M — лазер", 5.0)
         elif self.calibration is None:
             self.notify("Калібрування не знайдено — натисни K або C, щоб відкалібрувати")
         else:
@@ -274,6 +286,8 @@ class LaserApp:
         cam = self.picker_cams[self.picker_sel]
         self.mode = self._picker_return
         self._select_camera(cam)
+        if self.mouse_input:
+            self.toggle_mouse()                  # a camera picked is a laser to be seen
         print(f"[camera] using [{self.camera_index}] {self.camera_name} "
               f"at {self.camera_size[0]}x{self.camera_size[1]}")
         self._check_calibration_camera()
@@ -288,12 +302,14 @@ class LaserApp:
         self.picker_boxes = overlay.draw_camera_picker(
             canvas, self.picker_cams, self.picker_sel,
             self._picker_original.index if self._picker_original else None, frame,
-            self.picker_msg, can_cancel=not self._picker_initial)
+            self.picker_msg, can_cancel=not self._picker_initial, mouse=True)
 
     def handle_picker_key(self, key: int) -> bool:
         ch = chr(key).lower() if 32 <= key < 127 else ""
         if key in (13, 10):                        # ENTER
             self.picker_confirm()
+        elif ch == "m":
+            self.use_mouse()
         elif ch.isdigit() and ch != "0":
             self.picker_move(int(ch) - 1)
         elif ch == "n" or key == 9:                # N or TAB
@@ -305,6 +321,9 @@ class LaserApp:
                 self.picker_move(self.picker_sel + 1)
         elif key == 27 and not self._picker_initial:   # ESC: back to the old camera
             original = self._picker_original
+            if original is None:
+                self.use_mouse()                 # no camera to go back to: the mouse
+                return True
             if original is None or not self._use_camera(original):
                 self.picker_msg = "жодна камера не відкрита — обери камеру"
                 return True
@@ -359,11 +378,16 @@ class LaserApp:
         except Exception:
             pass
         self._mouse_pos = (float(x), float(y))
+        if self.mouse_input and event == cv2.EVENT_LBUTTONDOWN \
+                and self.mode in (MODE_MENU, MODE_GAME):
+            self._click = self._mouse_pos
         if self.mode == MODE_PICK and event == cv2.EVENT_LBUTTONDOWN:
             # First click previews a camera, a second click on it picks it.
             for i, (x0, y0, x1, y1) in enumerate(self.picker_boxes):
                 if x0 <= x <= x1 and y0 <= y <= y1:
-                    if i == self.picker_sel and self.camera is not None:
+                    if i == len(self.picker_cams):           # "the mouse" button
+                        self._pending_mouse = True
+                    elif i == self.picker_sel and self.camera is not None:
                         self._pending_confirm = True
                     else:
                         self._pending_pick = i
@@ -404,6 +428,17 @@ class LaserApp:
                 if self._pending_confirm:
                     self._pending_confirm = False
                     self.picker_confirm()
+                if self._pending_mouse:
+                    self._pending_mouse = False
+                    self.use_mouse()
+
+                # With the mouse, a missing camera or picture stops nothing.
+                if self.mouse_input and self.mode in (MODE_TRACK, MODE_MENU, MODE_GAME):
+                    frame = self.camera.read()[0] if self.camera is not None else None
+                    if frame is None:
+                        if not self._step_without_camera():
+                            break
+                        continue
 
                 if self.mode == MODE_PICK or self.camera is None:
                     if self.mode != MODE_PICK:
@@ -512,6 +547,7 @@ class LaserApp:
             self.preview = 0            # tiles and targets need the whole screen
         self._close_game()
         self.menu = GameMenu(self.screen_size)
+        self.menu.mouse = self.mouse_input
         self.mode = MODE_MENU
         self.show_help = False
         self.trail.clear()
@@ -525,6 +561,9 @@ class LaserApp:
         t = time.time()
         point = self.pointer()
         choice = menu.update(t, point)
+        click = self.take_click()
+        if click is not None and choice is None:         # with the mouse, a click picks
+            choice = menu.click(click)
         menu.draw(canvas)
         if point is not None:
             overlay.draw_target(canvas, point[0], point[1], t, 1.0, crosshair=False)
@@ -579,10 +618,13 @@ class LaserApp:
             return
         t = time.time()
         point = self.pointer()
+        click = self.take_click()
+        if click is not None and hasattr(game, "click"):
+            game.click(click)                    # the teacher's settings
         # With no picture the laser cannot be seen, and a round left running
         # would cost lives for targets nobody could have shot. The mouse
         # pointer does not need the camera.
-        blind = self.camera.age > STALE and not self.mouse_input and game.needs_sight
+        blind = not self.mouse_input and game.needs_sight and self.camera.age > STALE
         if blind and game.state == "playing":
             game.toggle_pause(t)
             self._blind_pause = True
@@ -604,7 +646,7 @@ class LaserApp:
             if self._game_rank:
                 self._naming = NameEntry(self.screen_size, t,
                                          f"НОВИЙ РЕКОРД — №{self._game_rank}",
-                                         self.settings.get("player", ""))
+                                         self.settings.get("player", ""), mouse=self.mouse_input)
 
         if getattr(game, "done", False):         # the teacher's settings, saved
             self.open_menu()
@@ -613,6 +655,8 @@ class LaserApp:
         if game.state == "over":
             game.draw_over(canvas, scores, self._game_rank or None)
             if self._naming is not None:
+                if click is not None:
+                    self._naming.click(click)
                 name = self._naming.update(t, points)
                 self._naming.draw(canvas)
                 for x, y in points:
@@ -628,8 +672,10 @@ class LaserApp:
             # a button of its own (the duels' REMATCH) has no need of these.
             if not getattr(game, "own_buttons", False):
                 if self._end is None:
-                    self._end = EndButtons(self.screen_size, t)
+                    self._end = EndButtons(self.screen_size, t, mouse=self.mouse_input)
                 picked = self._end.update(t, points)
+                if picked is None and click is not None:
+                    picked = self._end.click(click)
                 self._end.draw(canvas)
                 for x, y in points:
                     game.draw_pointer(canvas, x, y, t)
@@ -846,8 +892,7 @@ class LaserApp:
                          "натисни E, щоб зменшити експозицію",
                          (20, h - 46), 0.6, overlay.YELLOW)
 
-        if t < self.status_until:
-            overlay.text(canvas, self.status, (20, 30), 0.7, overlay.YELLOW)
+        self._draw_messages(canvas)
 
         if self.preview:
             # The wide preview would sit on top of the calibration instructions,
@@ -872,10 +917,65 @@ class LaserApp:
             overlay.draw_preview(canvas, frame, self.detector.mask, point, quad,
                                  mode=mode, camera_label=label, maps=maps)
 
+        self._draw_help(canvas)
+
+    def _draw_messages(self, canvas) -> None:
+        if time.time() < self.status_until:
+            overlay.text(canvas, self.status, (20, 30), 0.7, overlay.YELLOW)
+
+    def _draw_help(self, canvas) -> None:
+        t = time.time()
         if self.show_help and (self.help_until == 0.0 or t < self.help_until):
             overlay.draw_help(canvas)
         elif self.show_help:
             self.show_help = False
+
+    # -- the mouse instead of a laser ---------------------------------------
+    def toggle_mouse(self) -> None:
+        self.mouse_input = not self.mouse_input
+        self.settings["pointer"] = "mouse" if self.mouse_input else "laser"
+        self._save_settings()
+        if self.mouse_input:
+            self.notify("вказівник: миша — клацай або тримай ліву кнопку", 3.0)
+        elif self.camera is None:
+            self.open_picker()                   # a laser needs a camera to be seen
+        else:
+            self.notify("вказівник: лазер", 2.5)
+        if self.menu is not None:
+            self.menu.mouse = self.mouse_input
+
+    def use_mouse(self) -> None:
+        """From the camera chooser: play with the mouse, camera or not."""
+        if not self.mouse_input:
+            self.toggle_mouse()
+        self.open_menu()
+
+    def take_click(self) -> Optional[Tuple[float, float]]:
+        """The mouse click not yet acted on, if there is one - once."""
+        click, self._click = self._click, None
+        return click
+
+    def _step_without_camera(self) -> bool:
+        """A frame with the mouse and no picture: the games and the menu run
+        as usual, and only the camera's own read-outs are left off."""
+        self.detection = None
+        canvas = overlay.blank(self.screen_size)
+        if self.mode == MODE_GAME:
+            self.step_game(canvas)
+        elif self.mode == MODE_MENU:
+            self.step_menu(canvas)
+        else:
+            self.step_tracking(canvas)
+        h = canvas.shape[0]
+        overlay.text(canvas, "миша — без камери     M — лазер     V — вибрати камеру     H — довідка",
+                     (20, h - 20), 0.55, overlay.GREY)
+        self._draw_messages(canvas)
+        self._draw_help(canvas)
+        cv2.imshow(WINDOW, canvas)
+        key = cv2.waitKey(15) & 0xFF
+        if key != 255 and not self.handle_key(key):
+            return False
+        return cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) >= 1
 
     def auto_tune(self) -> None:
         """Sample ~0.5s of video and lift the thresholds above the background."""
@@ -948,10 +1048,15 @@ class LaserApp:
                 if choice is not None:
                     self.start_game(choice)
             elif low == "m":
-                self.mouse_input = not self.mouse_input
+                self.toggle_mouse()
             return True
 
         if self.mode == MODE_GAME and self.game is not None and self.game.key(key):
+            return True
+
+        if self.camera is None and low and low in "cfkdeuar[],.":
+            # Calibration and the camera's settings: nothing to set without one.
+            self.notify("це налаштування камери й лазера — камери немає;  V — вибрати камеру", 3.0)
             return True
 
         if low == "g":
@@ -977,9 +1082,7 @@ class LaserApp:
         elif low == "v":
             self.open_picker()
         elif low == "m":
-            self.mouse_input = not self.mouse_input
-            self.notify("вказівник: миша (тримай ліву кнопку)" if self.mouse_input
-                        else "вказівник: лазер", 2.5)
+            self.toggle_mouse()
         elif low == "u":
             self.correct_preview = not self.correct_preview
             if self.calibration and self.calibration.lens:

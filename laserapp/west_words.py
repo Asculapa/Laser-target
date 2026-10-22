@@ -11,6 +11,7 @@ Each line is spoken in one of two deliveries (mood()): "call", shouted over
 the street, or "calm", for the tutorial, where a child has to follow what is
 said. Recorded by tools/west_voice.py into assets/west/voice/; a line whose
 text changes here is played without sound until it is recorded again.
+STRESS tells the speech model where to stress the words it gets wrong.
 """
 
 LINES = {
@@ -55,6 +56,13 @@ LINES = {
     "good": "Молодець!",
     "good.2": "Точно в ціль!",
     "trained": "Навчання завершено. А тепер — справжнє місто!",
+}
+
+# Words the speech model stresses wrongly here: a "+" after the stressed vowel.
+STRESS = {
+    "нічого": "нічо+го",       # "never mind", not "nothing to"
+    "виходить": "вихо+дить",   # is coming out, not will
+    "каліко": "Ка+ліко",       # Calico, the town
 }
 
 # How each line is said; anything not here is a call.

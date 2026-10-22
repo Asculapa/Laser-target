@@ -681,17 +681,16 @@ two or three variants, picked at random, so the game does not nag in one
 tone. The lines are in `laserapp/west_words.py`; none of them is shown on
 screen, so they are written to be heard.
 
-They are spoken by [OmniVoice](https://github.com/k2-fsa/OmniVoice), run from
-a [VoiceStudio](https://github.com/debpalash/VoiceStudio) checkout
-(`./build_story_audio.sh west`, ~2.4 GB of weights, CPU is enough, about an
-hour for all of them). OmniVoice copies the *delivery* of the clip it clones
-as well as the voice, so the announcer has two references in one voice,
-kept in `tools/voices/`: a call, shouted over the street, and a calm one for
-the tutorial. Each line is said three times and the take that fits is kept:
-the liveliest for a call, the middle one for a calm line, and never one whose
-length is wrong for its words. **The OmniVoice weights are CC-BY-NC**, so
-these recordings are for non-commercial use - fine for a school, not for a
-product that is sold. (The story's voices, made with StyleTTS2, are MIT.)
+They are spoken by the same model as the story's Ukrainian voices -
+StyleTTS2 trained on Ukrainian speech (MIT, so the recordings ship freely) -
+in one of its own voices, a man's with a wide swing in pitch
+(`./build_story_audio.sh west`, about six minutes for all of them). The model
+works out where each word's stress falls; the few it gets wrong here are put
+right in `STRESS` in `west_words.py`. A line is either a call, quicker and
+with the street's echo, or calm and slower for the tutorial. Each is said
+three times and the take that fits is kept: the liveliest for a call, the
+middle one for a calm line, and never one whose length is wrong for its
+words.
 
 **Sound and sight.** Every bullet is a revolver going off - a crack, the
 blast, a thump and the street's echo - with what it hit after it: a thud, a

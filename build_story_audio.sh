@@ -10,9 +10,8 @@
 #   ./build_story_audio.sh uk              # one language
 #   ./build_story_audio.sh uk --force      # all of it again
 #   ./build_story_audio.sh uk --only c1i03,c2f
-#   ./build_story_audio.sh west            # the Wild West's announcer: OmniVoice, from a
-#                                          # VoiceStudio checkout ($VOICESTUDIO, default
-#                                          # ~/prj/VoiceStudio; ~2.4 GB of weights, CC-BY-NC)
+#   ./build_story_audio.sh west            # the Wild West's announcer, in the same
+#                                          # Ukrainian model as the story
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -28,16 +27,7 @@ venv() {    # venv DIR - this system's Python ships without pip (see README)
 }
 
 for lang in $langs; do
-    if [ "$lang" = west ]; then
-        cache=.build-cache/tts-omni
-        venv "$cache"
-        if ! "$cache/venv/bin/python" -c 'import torch, transformers, soundfile' 2>/dev/null; then
-            "$cache/venv/bin/pip" install -q --index-url https://download.pytorch.org/whl/cpu \
-                torch torchaudio
-            "$cache/venv/bin/pip" install -q "transformers>=5.10" accelerate pydub soundfile numpy
-        fi
-        "$cache/venv/bin/python" -W ignore tools/west_voice.py "$@"
-    elif [ "$lang" = en ]; then
+    if [ "$lang" = en ]; then
         cache=.build-cache/tts
         release=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
         venv "$cache"
@@ -49,7 +39,7 @@ for lang in $langs; do
         "$cache/venv/bin/python" tools/story_audio.py       # the effects need only numpy
         "$cache/venv/bin/python" tools/story_audio.py --lang en \
             --model "$cache/kokoro-v1.0.onnx" --voices "$cache/voices-v1.0.bin" "$@"
-    else
+    else                                         # uk, and the Wild West's announcer
         cache=.build-cache/tts-uk
         space=https://huggingface.co/spaces/patriotyk/styletts2-ukrainian/resolve/main/voices
         venv "$cache"
@@ -62,19 +52,24 @@ for lang in $langs; do
                 "git+https://github.com/patriotyk/ipa-uk.git" \
                 "git+https://github.com/patriotyk/styletts2-inference@209352700cf703a05ff94501290095dd9072fd5f"
         fi
-        # The voices the cast in tools/story_audio.py is made of.
+        # The voices the story's cast and the Wild West's announcer are made of.
         mkdir -p "$cache/voices"
         "$cache/venv/bin/python" - "$cache/voices" "$space" <<'EOF'
 import sys, urllib.parse, urllib.request
 from pathlib import Path
 sys.path.insert(0, "tools")
 from story_audio import CAST
-for voice, *_ in CAST["uk"].values():
+from west_voice import VOICE
+for voice in [v for v, *_ in CAST["uk"].values()] + [VOICE]:
     path = Path(sys.argv[1]) / f"{voice}.pt"
     if not path.exists():
         urllib.request.urlretrieve(f"{sys.argv[2]}/{urllib.parse.quote(voice)}.pt", path)
 EOF
-        "$cache/venv/bin/python" -W ignore tools/story_audio.py --lang uk \
-            --voices "$cache/voices" "$@"
+        if [ "$lang" = west ]; then
+            "$cache/venv/bin/python" -W ignore tools/west_voice.py --voices "$cache/voices" "$@"
+        else
+            "$cache/venv/bin/python" -W ignore tools/story_audio.py --lang uk \
+                --voices "$cache/voices" "$@"
+        fi
     fi
 done

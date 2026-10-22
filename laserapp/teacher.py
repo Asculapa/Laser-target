@@ -134,6 +134,13 @@ class TeacherSettings(Round):
         else:
             setattr(self.settings, name, value)
 
+    def click(self, point: Tuple[float, float]) -> None:
+        """A mouse click picks the choice under it at once."""
+        for i, (x0, y0, x1, y1) in enumerate(self._boxes):
+            if x0 <= point[0] <= x1 and y0 <= point[1] <= y1:
+                self.press(i)
+                return
+
     def key(self, key: int) -> bool:
         if key in (13, 10):
             self.press(len(self._keys) - 1)

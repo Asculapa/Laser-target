@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import random
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
@@ -41,10 +42,12 @@ import numpy as np
 
 from . import jars, overlay, sound
 from . import west_art as art
+from . import west_words
 from .game import OVER, PAUSED, PLAYING, HighScores, Round, Shot, Stats, Target
 from .story import Hold
 
 SOUNDS = art.ASSETS / "sound"
+VOICE = art.ASSETS / "voice"         # the announcer, see west_words.py
 SETUP, STREET, SHOWDOWN, CLEAR, NOON = "setup", "street", "showdown", "clear", "noon"
 POP, PEEK, RUN, TEAM = "pop", "peek", "run", "team"     # kinds of bandit
 
@@ -260,6 +263,8 @@ class West(Round):
                  level: str = "sheriff", seed: Optional[int] = None) -> None:
         super().__init__(screen_size, seed)
         self.sound = sound.Player(SOUNDS)
+        self.voice = sound.Player(VOICE)
+        self._voice_dice = random.Random()       # which variant; never the game's own dice
         self.two = players == 2
         self.level = LEVELS[level]
         self.scores_name = f"highscores-west-{players}p-{level}"
@@ -329,6 +334,13 @@ class West(Round):
 
     def close(self) -> None:
         self.sound.stop()
+        self.voice.stop()
+
+    def _announce(self, key: str) -> None:
+        """The announcer calls it - cutting short whatever he was saying -
+        in one of the line's variants, so a call that comes often varies."""
+        said = self._voice_dice.choice(west_words.variants(key))
+        self.voice.say(said, west_words.LINES[said])
 
     def _enter(self, stage: int, now: float) -> None:
         """Out into the next street."""
@@ -344,6 +356,7 @@ class West(Round):
         self._next = now + 1.2
         self._banner = (self.scene.title, now + 1.6)
         self._message = ("", -1.0)
+        self._announce(f"street{stage}")
         self._holes.clear()                      # a new street, with its walls whole
         if stage == 0 and self.level.ammo:
             self._sub = (f"набоїв у барабані: {self.level.ammo} — потім стріляй у смугу "
@@ -501,6 +514,7 @@ class West(Round):
             if not self._taught[p]:
                 # The first time, stop and say it in the middle of the screen.
                 self._taught[p] = True
+                self._announce("reload")
                 who = f"{player.name}: " if self.two else ""
                 self._message = (f"{who}НАБОЇ СКІНЧИЛИСЯ!", now + 2.5)
                 self._sub = ("стріляй у смугу ПЕРЕЗАРЯДКИ внизу екрана", now + 2.5)
@@ -537,7 +551,7 @@ class West(Round):
             t.dying, t.end = now, "hit"
             self.team[p].stats.decoys += 1
             self.stats.decoys += 1
-            self._hurt(now, "НЕ В МИРНИХ!", "oops")
+            self._hurt(now, "НЕ В МИРНИХ!", "oops", voice="townsfolk")
             self.shots.append(Shot(t.x, t.y, now, 0, "мирний!", False))
         elif t.kind == TEAM:
             self._team_hit(t, p, now)
@@ -607,6 +621,7 @@ class West(Round):
             self._gold = now + self.GOLD
             self._message = ("ЗОЛОТО!  ПОДВІЙНІ ОЧКИ", now + 1.2)
         self.sound.blip(t.kind)
+        self._announce(t.kind)
 
     def _missed(self, gun: Gun, x: float, y: float, now: float) -> None:
         p = gun.owner
@@ -614,7 +629,7 @@ class West(Round):
             return
         if self.phase == SHOWDOWN and not self._drawn and self.bosses \
                 and all(b.dying is None for b in self.bosses):
-            self._hurt(now, "ЗАРАНО!", "hurt", p)
+            self._hurt(now, "ЗАРАНО!", "hurt", p, voice="early")
             self._restart_showdown(now)
             return
         if self.phase == NOON and not self._drawn and self._noon_result < now:
@@ -640,8 +655,12 @@ class West(Round):
         self._holes.append((x, y, now))
         del self._holes[:-self.HOLES]
 
-    def _hurt(self, now: float, words: str, noise: str, side: Optional[int] = None) -> None:
+    def _hurt(self, now: float, words: str, noise: str, side: Optional[int] = None,
+              voice: str = "") -> None:
         self.lives -= 1
+        voice = "gameover" if self.lives <= 0 else "lastlife" if self.lives == 1 else voice
+        if voice:
+            self._announce(voice)
         self.combo = 0
         self.crossfire = 0
         self._shake = now
@@ -717,7 +736,7 @@ class West(Round):
                         t.end, t.pose = "fired", "shoot"
                         for s in (self.stats, self.team[t.side].stats):
                             s.escaped += 1
-                        self._hurt(now, "ТЕБЕ ПОРАНЕНО!", "enemy", t.side)
+                        self._hurt(now, "ТЕБЕ ПОРАНЕНО!", "enemy", t.side, voice="hit")
                     else:
                         t.end = "left"
             else:
@@ -829,6 +848,7 @@ class West(Round):
         self._banner = ("ДУЕЛЬ", now + 1.5)
         self.sound.stop()
         self.sound.blip("bell")
+        self._announce("showdown")
 
     def _restart_showdown(self, now: float) -> None:
         for b in self.bosses:
@@ -844,9 +864,11 @@ class West(Round):
         if all(b.end == "hit" for b in self.bosses):
             if now - max(b.dying for b in self.bosses) >= 1.2:
                 self.phase = CLEAR
-                self._banner = ("ЕТАП ПРОЙДЕНО" if self.stage + 1 < len(STAGES)
-                                else "МІСТО В БЕЗПЕЦІ", now + self.BANNER)
+                last = self.stage + 1 >= len(STAGES)
+                self._banner = ("МІСТО В БЕЗПЕЦІ" if last else "ЕТАП ПРОЙДЕНО",
+                                now + self.BANNER)
                 self.sound.blip("clear")
+                self._announce("safe" if last else "clear")
             return
         fired = [b for b in self.bosses if b.end == "fired"]
         if fired:
@@ -862,6 +884,7 @@ class West(Round):
                     self.targets.append(b)
                 self._message = ("СТРІЛЯЙ!", now + 0.8)
                 self.sound.blip("draw")
+                self._announce("draw")
             return
         for b in self.bosses:
             if b.dying is None and b.age(now) >= b.lifetime:
@@ -871,7 +894,7 @@ class West(Round):
                         self.targets.remove(o)
                 for s in (self.stats, self.team[b.side].stats):
                     s.escaped += 1
-                self._hurt(now, "ЗАПІЗНО!", "enemy", b.side)
+                self._hurt(now, "ЗАПІЗНО!", "enemy", b.side, voice="slow")
                 break
 
     def _boss_down(self, boss: Figure, p: int, now: float) -> None:
@@ -899,6 +922,7 @@ class West(Round):
         self._noon_result = -1.0
         self._banner = ("РІВНО ОПІВДНІ", now + 2.0)
         self._noon_round(now + 1.5)
+        self._announce("noon")
 
     def _noon_round(self, now: float) -> None:
         for b in self.bottles:
@@ -919,6 +943,7 @@ class West(Round):
                 self.team[winner].noon += 1
                 bonus = self._credit(winner, 500, now, None, counts=False)
                 self.phase = CLEAR
+                self._announce(f"noon_win{winner}")
                 self._banner = (f"ДУЕЛЬ ОПІВДНІ ВИГРАЄ {self.team[winner].name}  +{bonus}",
                                 now + self.BANNER)
                 self.sound.blip("clear")
@@ -930,6 +955,7 @@ class West(Round):
             self.targets.extend(self.bottles)
             self._message = ("СТРІЛЯЙ!", now + 0.8)
             self.sound.blip("draw")
+            self._announce("draw")
         elif self._drawn and now - self._drawn_at > 3.0:
             self._noon_round(now)                # nobody: again
 

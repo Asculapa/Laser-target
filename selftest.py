@@ -1665,7 +1665,7 @@ def main() -> int:
     roomy.choose(GAMES.index(entry("Дикий Захід")))
     passed &= check("the Wild West's levels are a table: a row for one player, a row for two",
                     [(key, len(ids)) for key, ids in roomy.rows()] ==
-                    [("1 гравець", 3), ("2 гравці", 3)])
+                    [("1 гравець", 3), ("2 гравці", 3), ("для початку", 1)])
     now, picked = 0.0, None
     while now < 3 and menu.page is None:
         now += 0.05
@@ -1721,13 +1721,13 @@ def main() -> int:
     names = [g.scores_name for g in made]
     passed &= check("every menu entry builds its game",
                     [type(g).__name__ for g in made] ==
-                    ["Game", "Silhouette"] + ["West"] * 6 + ["Duel", "JarRange", "QuickDraw"]
+                    ["Game", "Silhouette"] + ["West"] * 6 + ["WestTraining", "Duel", "JarRange", "QuickDraw"]
                     + ["BalloonMath"] * 3 + ["NumberHunt"] * 2 + ["Story"] * 2 + ["TeacherSettings"])
     passed &= check("each scored game keeps its own table",
                     names == ["highscores", "highscores-silhouette"]
                     + [f"highscores-west-{n}p-{l}" for n in (1, 2)
                        for l in ("deputy", "sheriff", "marshal")]
-                    + [None] * 6 + ["highscores-hunt-5-6", "highscores-hunt-7-9", None, None, None],
+                    + [None] * 7 + ["highscores-hunt-5-6", "highscores-hunt-7-9", None, None, None],
                     str(names))
     passed &= check("ESC steps back a page, then out", menu.back() and not menu.back())
 
@@ -2126,8 +2126,167 @@ def main() -> int:
                         all(l and l > 30 for l in lengths),
                         "  ".join(f"{l:.0f}s" if l else "none" for l in lengths))
 
+    passed &= _newer_checks()
     print("\n" + ("ALL CHECKS PASSED" if passed else "SOME CHECKS FAILED"))
     return 0 if passed else 1
+
+
+def _newer_checks() -> bool:
+    """The tutorial, high-score names, the teacher's settings, mouse clicks
+    and the effects mixer."""
+    import math
+    import tempfile
+    from laserapp import mixer, sound as audio
+    from laserapp.game import HighScores, Stats
+    from laserapp.menu import AGAIN, EndButtons, GameMenu
+    from laserapp.names import AGAIN as SAME_NAME, DONE, NameEntry, RUB, SPACE
+    from laserapp.mathgames import BalloonMath, NumberHunt
+    from laserapp.teacher import MathSettings, TeacherSettings
+    from laserapp.west import Strip
+    from laserapp.west_training import LESSONS, WestTraining
+    audio.enabled = False
+    passed = True
+    size = (1920, 1080)
+
+    print("wild west tutorial:")
+    g = WestTraining(size, seed=3)
+    g.start(0.0)
+    clock = [0.0]
+
+    def run(until, dot=None):
+        while clock[0] < until:
+            clock[0] += 1 / 30
+            g.update(clock[0], dot, [dot] if dot else [])
+
+    def shoot(x, y):
+        run(clock[0] + 0.4)
+        run(clock[0] + 0.1, (x, y))
+        run(clock[0] + 0.3)
+
+    run(6.0)
+    p = g._pupil
+    shoot(p.x, p.y - p.height * 0.1)
+    run(clock[0] + 2.0)
+    passed &= check("lesson 1: a bandit shot, on to the next", g.lesson == 1)
+    p = g._pupil
+    shoot(p.x, p.y - p.height * 0.1)
+    run(clock[0] + 2.0)
+    passed &= check("lesson 2: shooting the townsman repeats it, and costs no life",
+                    g.lesson == 1 and g.lives == g.level.lives)
+    run(clock[0] + 6.0)
+    passed &= check("...and letting him go passes it", g.lesson == 2 and g.team[0].ammo == 0)
+    shoot(size[0] / 2, size[1] * 0.97)
+    run(clock[0] + 2.0)
+    passed &= check("lesson 3: the RELOAD bar fills the gun", g.lesson == 3)
+    run(clock[0] + 4.0)
+    passed &= check("lesson 4: a bandit who fires first repeats it",
+                    g.lesson == 3 and g.lives == g.level.lives)
+    run(clock[0] + 1.0)
+    p = g._pupil
+    shoot(p.x, p.y - p.height * 0.1)
+    run(clock[0] + 4.0)
+    passed &= check("...and beating him ends the practice",
+                    g.lesson == len(LESSONS) and g.state == "over" and g.scores_name is None)
+
+    print("high-score names:")
+    n = NameEntry(size, 0.0, "", last="Оля")
+    for key in ("О", "Л", "Е", "Г", SPACE, SPACE, "К", "К", RUB):
+        n.press(key)
+    passed &= check("letters typed get a capital at each word, one space, and rub out",
+                    n.name == "Олег К", repr(n.name))
+    n.press(SAME_NAME)
+    passed &= check("the last name is one key away", n.name == "Оля")
+    n.update(5.0, [])
+    box = n._boxes[n._keys.index(DONE)]
+    n.click(((box[0] + box[2]) / 2, (box[1] + box[3]) / 2))
+    passed &= check("a mouse click presses a key", n.result == "Оля")
+    with tempfile.TemporaryDirectory() as tmp:
+        table = HighScores(Path(tmp) / "t.json")
+        rank = table.add(Stats(score=50), "9 жовт 10:00")
+        table.set_name(rank, "Оля")
+        again = HighScores(Path(tmp) / "t.json")
+        passed &= check("a name is kept with its score, Cyrillic and all",
+                        again.entries[0].get("name") == "Оля"
+                        and "Оля" in (Path(tmp) / "t.json").read_text(encoding="utf-8"))
+
+    print("teacher settings:")
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp)
+        t = TeacherSettings(size)
+        t.home = home
+        t.start(0.0)
+        for key in (("tasks", 5), ("top1", 10), ("tables", 2), ("tables", 3), ("hunt", 120)):
+            t.press(t._keys.index(key))
+        t.press(len(t._keys) - 1)
+        saved = MathSettings.load(home)
+        passed &= check("choices are saved", t.done and saved.tasks == 5 and saved.top1 == 10
+                        and 2 not in saved.tables and 3 not in saved.tables and saved.hunt == 120,
+                        str(saved))
+        b = BalloonMath(size, 3, seed=1)
+        b.home = home
+        b.start(0.0)
+        made = [tuple(map(int, task.text.split(" × "))) for task in b.tasks]
+        passed &= check("Balloon Math asks for as many sums, from the tables chosen",
+                        len(b.tasks) == 5 and all(x in saved.tables or y in saved.tables
+                                                  for x, y in made), str(made))
+        b = BalloonMath(size, 1, seed=1)
+        b.home = home
+        b.start(0.0)
+        passed &= check("...and adds up to the limit chosen",
+                        all(task.answer <= 10 and max(map(int, task.text.split()[::2])) <= 10
+                            for task in b.tasks))
+        h = NumberHunt(size, "5-6", seed=1)
+        h.home = home
+        h.start(0.0)
+        passed &= check("Number Hunt lasts as long as chosen", h.duration == 120.0)
+        b.results = [True, False, True, False, True]
+        b.tasks = b.tasks[:5]
+        passed &= check("the end lists the sums to go over again",
+                        any(b.tasks[1].text in line for line in b.review()), str(b.review()))
+
+    print("mouse:")
+    menu = GameMenu(size)
+    box = menu.boxes()[2]
+    passed &= check("a click on a tile with one option starts it at once",
+                    menu.click(((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)) is not None)
+    end = EndButtons(size, 0.0, mouse=True)
+    end.update(5.0, [])
+    box = end.boxes()[0]
+    passed &= check("a click on PLAY AGAIN plays again",
+                    end.click(((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)) == AGAIN)
+
+    print("wild west announcer:")
+    from laserapp import west_words
+    from laserapp.west import VOICE
+    import re
+    called = set()
+    for name in ("west.py", "west_training.py"):
+        source = (Path("laserapp") / name).read_text(encoding="utf-8")
+        called |= set(re.findall(r'_announce\("(\w+)"', source))
+        called |= set(re.findall(r'voice="(\w+)"', source))
+    called |= {f"street{i}" for i in range(6)} | {f"lesson{i}" for i in range(1, 5)} \
+        | {"noon_win0", "noon_win1", "coin", "star", "safe", "clear", "gameover", "lastlife"}
+    passed &= check("every call the game makes has a line to say",
+                    all(west_words.variants(k) for k in called),
+                    ", ".join(sorted(k for k in called if not west_words.variants(k))))
+    said = audio.Player(VOICE)
+    silent = [k for k, text in west_words.LINES.items() if said.length(k, text) is None]
+    passed &= check("every line is recorded as it is written (./build_story_audio.sh west)",
+                    not silent, ", ".join(silent))
+
+    print("effects mixer:")
+    m = mixer.Mixer()
+    shot = ASSETS.parent / "west" / "sound" / "hit.wav"
+    m.play(shot)
+    one = m.mix(2400)
+    m = mixer.Mixer()
+    m.play(shot)
+    m.play(shot)
+    two = m.mix(2400)
+    passed &= check("two shots at once are both heard - and held short of clipping",
+                    np.abs(two).sum() > 1.3 * np.abs(one).sum() and np.abs(two).max() <= 1.0,
+                    f"peak {np.abs(two).max():.2f}")
+    return passed
 
 
 if __name__ == "__main__":

@@ -6,7 +6,12 @@ where the laser is. Includes [games](#games) - a shooting gallery, a
 silhouette range, two maths games for school classes, a voiced story in
 five chapters, a split-screen duel for two lasers, two jar-shooting
 games for two players and a Wild West shoot-out in the manner of the arcade
-light-gun games - press **G**.
+light-gun games - press **G**. No laser or camera to hand? Play with the
+[mouse](#without-a-laser).
+
+Everything on screen is in **Ukrainian**, and a [guide in Ukrainian](#українською-як-грати)
+for the teachers who run it comes first, below. Quotes of on-screen text in
+the English reference give the Ukrainian and what it means.
 
 Alignment comes from a **homography** solved during calibration: the screen is
 a plane, the camera sees it from some angle, so one 3x3 projective transform
@@ -17,6 +22,107 @@ scale, rotation and projector keystone all at once.
 A homography maps straight lines to straight lines, which a **wide-angle lens
 does not** - it bows them outwards ("barrel" distortion). So the distortion is
 measured and removed first; see [Wide-angle cameras](#wide-angle-cameras).
+
+## Українською: як грати
+
+Коротко — для вчителя, який запускає програму в класі. Технічні подробиці
+нижче, англійською.
+
+**Лазерний тир** бачить червону цятку лазерної указки на екрані (чи на
+проєкторі) через звичайну вебкамеру — і на екрані з'являється приціл саме там,
+куди світить указка. Усе меню й усі ігри — українською.
+
+### Що потрібно
+
+* комп'ютер із Windows або Linux;
+* екран або проєктор;
+* звичайна USB-вебкамера;
+* червона лазерна указка.
+
+Немає камери чи указки — грайте **мишею** (див. нижче).
+
+### Установлення на Windows
+
+1. Розпакуйте `LaserTarget-windows-x64.zip` у будь-яку папку, куди можна
+   записувати, — наприклад, на Робочий стіл. Тільки не в `Program Files`.
+2. Двічі клацніть **`Laser Target.bat`**. Більше нічого встановлювати не треба.
+
+Калібрування, рекорди й налаштування зберігаються в тій самій папці.
+
+### Перший запуск
+
+1. Поставте камеру так, щоб вона бачила **весь** екран. Що саме вона бачить,
+   показано в правому верхньому куті.
+2. Якщо камер кілька, програма спитає, котру взяти. У тому ж списку є кнопка
+   **«Грати мишею — без камери і лазера»**.
+3. Далі програма калібрується сама: на екрані по черзі спалахують точки.
+   Не рухайте камеру й не затуляйте екран — це секунд п'ятнадцять.
+4. Натисніть **G** — відкриється вибір гри.
+
+Пересунули камеру, екран чи проєктор — натисніть **K**, і калібрування
+пройде ще раз.
+
+### Як стріляти
+
+Наведіть указку на ціль і **увімкніть промінь** — це постріл. Можна й
+інакше: **затримати** промінь на цілі, поки не замкнеться кільце. Картки
+меню й кнопки наприкінці гри вибирають так само: тримайте на них промінь,
+доки не заповниться зелена смужка.
+
+### Ігри
+
+| | Гра | Що робити |
+| --- | --- | --- |
+| **1** | **Тир** | *мішені* — хвилина стрільби; *силует* — десять прицільних пострілів |
+| **2** | **Дикий Захід** | 1 або 2 гравці разом, три рівні. Стріляйте в бандитів із револьвером, мирних не чіпайте. Є **навчання** — чотири короткі уроки, де нічого не втрачаєш |
+| **3** | **Дуель у тирі** | двоє гравців (8–9 класи): кожен на своїй половині екрана |
+| **4** | **Стрільба по банках** | двоє гравців: *банки* — хто більше розіб'є; *хто швидший* — хто перший |
+| **5** | **Математичні кульки** | 2–4 класи: затримайте промінь на кульці з правильною відповіддю |
+| **6** | **Полювання на числа** | 5–9 класи: стріляйте лише в числа, що підходять під правило |
+| **7** | **Історія** | «Останній вогник Ліхтарної скелі» — п'ять розділів, озвучених українською |
+| **8** | **Для вчителя** | налаштування математичних ігор |
+
+Під час гри: **G** — почати заново, **P** — пауза, **ESC** — вийти.
+
+### Мишею замість лазера
+
+Натисніть **M** (або виберіть мишу в списку камер). Клацання — це постріл,
+а затиснута ліва кнопка — те саме, що промінь, який тримають на цілі.
+Картки меню й кнопки вибирають одним клацанням. Камера для цього не потрібна.
+Програма запам'ятає вибір; повернутися до лазера — знову **M**.
+
+### Для вчителя
+
+Картка **«Для вчителя»** в меню:
+
+* скільки прикладів у «Математичних кульках» (5, 10, 15 чи 20);
+* до якого числа додавати й віднімати;
+* на які числа таблиця множення;
+* скільки хвилин триває «Полювання на числа».
+
+Наприкінці обох математичних ігор видно, що не вдалося з першого разу:
+*«Повторити: 7 × 8 = 56»*, *«Не підходили: 21 (кратні 4)»*.
+
+### Рекорди
+
+Хто поставив рекорд, пише своє ім'я на екранній клавіатурі — указкою чи
+мишею. **ESC** — залишити рекорд без імені.
+
+### Головні клавіші
+
+| Клавіша | Що робить |
+| --- | --- |
+| `G` | вибір гри |
+| `P` | пауза |
+| `ESC` | назад / вийти з гри |
+| `M` | миша замість лазера (і навпаки) |
+| `K` | калібрувати ще раз |
+| `V` | вибрати іншу камеру |
+| `H` | довідка про всі клавіші |
+| `Q` | вийти з програми |
+
+Якщо камеру від'єднали, програма так і скаже. Під'єднайте її знову — вона
+підхопиться сама.
 
 ## Install
 
@@ -29,6 +135,9 @@ bootstrapped rather than installed system-wide):
     curl -sS https://bootstrap.pypa.io/get-pip.py | .venv/bin/python
     .venv/bin/pip install -r requirements.txt
 
+It needs **opencv-python 5** or later: the Ukrainian on screen is drawn with
+`cv2.putText`, and only from version 5 does its font have Cyrillic in it.
+
 ## Windows
 
 Build a portable bundle (on this Linux machine - no Wine needed):
@@ -36,7 +145,8 @@ Build a portable bundle (on this Linux machine - no Wine needed):
     ./build_windows.sh            # -> dist/LaserTarget-windows-x64.zip
 
 It pairs the official embeddable Python 3.12 with Windows builds of OpenCV,
-NumPy and pygrabber (for camera names), so the target PC needs nothing
+NumPy, pygrabber (for camera names) and sounddevice (to mix the sound
+effects, with PortAudio inside its wheel), so the target PC needs nothing
 installed. Copy the zip over, unzip it anywhere writable (not `Program Files`),
 and double-click **`Laser Target.bat`**. Command-line options work the same way:
 `"Laser Target.bat" --windowed`. `List cameras.bat` prints what DirectShow sees.
@@ -179,16 +289,43 @@ one player, a row for two). **ESC** steps back.
 | | **Learning games** | |
 | **5** | Balloon Math | grades 2-4: hold the laser on the balloon with the right answer |
 | **6** | Number Hunt | grades 5-9: shoot only the numbers that fit the rule |
-| **7** | Story | *The Last Light of Lantern Rock*: five chapters, five different games, told aloud - in English or Ukrainian |
+| **7** | Story | *The Last Light of Lantern Rock*: five chapters, five different games, told aloud - in Ukrainian or English |
+| **8** | For the teacher | *Для вчителя*: settings for the two maths games - see [below](#for-the-teacher) |
 
 During a game, **G** starts the same game again, **P** pauses and **ESC** goes
 back to tracking. At the end of a game there is no need for the keyboard:
-hold a laser on **PLAY AGAIN** or **OTHER GAMES** in the bottom corners (the
-duels have their **REMATCH** button instead). The buttons wait a moment and a
+hold a laser on **ЩЕ РАЗ** (play again) or **ІНШІ ІГРИ** (other games) in the
+bottom corners - or click one with the mouse (the duels have their **РЕВАНШ**,
+rematch, button instead). The buttons wait a moment and a
 half before they listen, since the players are usually still shooting when a
 game ends.
 
-Both maths games show digits and symbols only, so they need no translating.
+**High scores have names.** A score good enough for the table opens a
+Ukrainian keyboard on the screen, played like everything else - hold the
+laser on a letter, or click it with the mouse. Each word gets its capital by
+itself; the name typed last time is one key (*ще раз: Оля*); **ESC** keeps
+the score without a name. (The computer's keyboard cannot type the name:
+OpenCV hands over one byte a key, so Cyrillic never arrives. Enter,
+Backspace and Latin letters work from it.)
+
+### For the teacher
+
+The last tile, *Для вчителя*, is a page of choices for the maths games, held
+on with the laser or clicked, and kept in `maths.json` next to the
+calibration:
+
+| Choice | Options | Default |
+| --- | --- | --- |
+| sums in a round of Balloon Math | 5, 10, 15, 20 | 10 |
+| adding and taking away, the easier level, up to | 10, 20 | 20 |
+| ...the harder level, up to | 50, 100 | 100 |
+| times tables | any of 2-9 | all |
+| Number Hunt lasts | 1, 1.5, 2, 3 minutes | 1 |
+
+At the end of either game the panel lists what went wrong, for going over
+afterwards: Balloon Math the sums not right the first time (*Повторити:
+7 × 8 = 56*), Number Hunt the numbers shot that did not fit and the ones
+that got away, each with its rule (*Не підходили: 21 (кратні 4)*).
 
 ### Balloon Math (grades 2-4)
 
@@ -286,7 +423,11 @@ the app:
   by patriotyk (MIT), which also works out where the stress falls in a word
 
 Playback needs no extra Python package: it goes through PipeWire, PulseAudio
-or ALSA on Linux, and `winsound` on Windows. `--no-sound` keeps it quiet, and
+or ALSA on Linux, and `winsound` on Windows. Short effects are mixed inside
+the app (`laserapp/mixer.py`) through one stream kept open - PulseAudio's
+own API on Linux, `sounddevice` on Windows - so any number overlap and each
+starts at once; two players firing together are two shots. Where neither is
+there, effects are played like the voices, one at a time. `--no-sound` keeps it quiet, and
 a machine with no sound simply shows the text, timed for reading.
 
 #### Music
@@ -309,6 +450,16 @@ project's Python) into `laserapp/assets/story/music/c1.wav` to `c5.wav`; a
 chapter whose file is missing simply plays without. On Windows the music is
 played through MCI, beside `winsound`, so that it does not cut the effects
 off; if that does not work on a machine, there is everything but the music.
+
+**Levels.** Every sound in the app, in every game, is set by how loud it is
+to the ear rather than by its peak: a gunshot and a voice that peak alike
+are far apart, the shot's energy all in its first instants. `level()` in
+`tools/story_audio.py` measures it (the low end cut, the top lifted a
+little, the loudest 150 ms) and the generators place each sound against
+speech: a cue to notice - a fanfare, a bell, the draw, a hit taken - 5 dB
+under it, the player's own shot 9 dB under, a light hit 10, a click or tick
+13, and music 11 under on its average, give or take a piece meant to be
+softer or louder. Change those numbers there and run the generators again.
 
 The words are kept apart from the code, one file per language:
 `laserapp/story_words_en.py` and `story_words_uk.py` hold every spoken line
@@ -458,7 +609,7 @@ A shoot-out in the manner of the old arcade light-gun games. Bandits come up
 in the windows, doors and street of a Western town at night, gun in hand,
 and each one fires after a moment: **the ring closing on him is how long
 there is**, and it blinks when it is nearly gone. A bandit who fires costs a
-life - the screen jolts, *YOU'RE HIT!*. Townsfolk come up too, empty-handed:
+life - the screen jolts, *ТЕБЕ ПОРАНЕНО!* (you're hit). Townsfolk come up too, empty-handed:
 an old man with a sack, a gentleman in a hat, the butcher in his apron, a
 lady in a long dress. Shooting one costs a life as well. So the rule is the
 old one: **shoot the ones with a gun out**.
@@ -471,8 +622,8 @@ stands high enough for his gun to show over it, and only a bandit has the
 ring.
 
 When a street's bandits are all down, their leader walks out for a
-**showdown**. A bell, then he waits - *wait for it...* - for two to four
-seconds, never the same; then *DRAW!* and there is a second or less to get
+**showdown**. A bell, then he waits - *чекай...* (wait for it) - for two to four
+seconds, never the same; then *СТРІЛЯЙ!* (draw!) and there is a second or less to get
 him. Shooting before the shout, or too late, costs a life, and the showdown
 starts again. Six streets, six showdowns, and the town is safe - three to
 four minutes for a quick pair of hands, longer for most.
@@ -481,30 +632,31 @@ Pick it in the chooser by players and level:
 
 | Level | Lives | Bandits' fuses | Six-shooter | A life back each street |
 | --- | --- | --- | --- | --- |
-| **Deputy** | 7 | longer, a bandit fewer up at once | never needs reloading | yes |
-| **Sheriff** | 5 | as in the table below, a little longer | 6 shots | yes |
-| **Marshal** | 4 | shorter, a bandit more up at once | 6 shots | no |
+| **Deputy** (*Помічник шерифа*) | 7 | longer, a bandit fewer up at once | never needs reloading | yes |
+| **Sheriff** (*Шериф*) | 5 | as in the table below, a little longer | 6 shots | yes |
+| **Marshal** (*Маршал*) | 4 | shorter, a bandit more up at once | 6 shots | no |
 
 Each street brings something new:
 
 | Street | | New |
 | --- | --- | --- |
-| 1 · Main Street | St. Elmo | bandits pop up - learn the rule |
-| 2 · The Store | a row of shops | **peekers**: they duck behind their cover and come up again, and can only be shot while up |
-| 3 · The Inn | Virginia City | **runners** cross the street, gun out: aim ahead of them |
-| 4 · The Boardwalk | | (two players) **team shots** - see below |
-| 5 · Hank's Hotel | Calico | all of it, quicker |
-| 6 · Calico | | all of it, quickest, the shortest draw |
+| 1 · Main Street (*Головна вулиця*) | St. Elmo | bandits pop up - learn the rule |
+| 2 · The Store (*Крамниця*) | a row of shops | **peekers**: they duck behind their cover and come up again, and can only be shot while up |
+| 3 · The Inn (*Заїзний двір*) | Virginia City | **runners** cross the street, gun out: aim ahead of them |
+| 4 · The Boardwalk (*Дощаний тротуар*) | | (two players) **team shots** - see below |
+| 5 · Hank's Hotel (*Готель Генка*) | Calico | all of it, quicker |
+| 6 · Calico (*Каліко*) | | all of it, quickest, the shortest draw |
 
 **The six-shooter.** Six shots, shown at the bottom corner; a miss costs a
 bullet, so spraying the town does not pay. To reload, shoot the **RELOAD bar**
 along the bottom of the screen. The game teaches it: the countdown and the
 first street's title say so, and the first time a gun runs dry the game says
-it in the middle of the screen - *OUT OF BULLETS! shoot the RELOAD bar*. From
+it in the middle of the screen - *НАБОЇ СКІНЧИЛИСЯ!* (out of bullets) and how to reload. From
 then on the bar does the telling: at two bullets left it shows *2 left*, and
 when a gun is empty that player's part of the bar lights up in their colour,
-with arrows bouncing down at it and *SHOOT HERE TO RELOAD*; an empty gun shot
-anyway says *EMPTY - RELOAD* where it was aimed. *RELOADED!* says it worked.
+with arrows bouncing down at it and *СТРІЛЯЙ СЮДИ, ЩОБ ПЕРЕЗАРЯДИТИ*; an empty
+gun shot anyway says *ПОРОЖНЬО — ПЕРЕЗАРЯДИ* where it was aimed.
+*ПЕРЕЗАРЯДЖЕНО!* says it worked.
 With two players, each has their own half of the bar, but either half
 reloads the gun that shot it.
 
@@ -516,10 +668,45 @@ star** gives a life back.
 a small one - far down the street or at an upstairs window - and a quarter
 more for a peeker or a runner. Every hit in a row adds 0.1 to the multiplier.
 A showdown pays 500 to 1500, more the quicker the draw. At the end the town
-gives a rank - *Greenhorn, Trail Hand, Gunslinger, Town Hero*, or for a clean sweep
-with 80% accuracy and no townsfolk shot, *Legend of the West* - and the top
+gives a rank - *Жовтодзьоб* (greenhorn), *Добра підмога* (trail hand),
+*Гроза бандитів* (gunslinger), *Гордість міста* (town hero), or for a clean
+sweep with 80% accuracy and no townsfolk shot, *Легенда Дикого Заходу* - and the top
 five are kept for each level, in `highscores-west-1p-sheriff.json` and the
 like.
+
+**The tutorial.** *Навчання*, in the Wild West's own page, is a practice
+street before the real town: four lessons, one at a time, said at the top of
+the screen and read out - shoot a bandit with his gun out; let one of the
+townsfolk walk away; reload by shooting the bar; beat a bandit who does fire
+back. A mistake costs nothing: it says what went wrong, and the lesson
+starts again. No score is kept.
+
+**The announcer.** A voice calls the game, in Ukrainian: each street as you
+come into it, with a word on what it holds (*Заїзний двір! Тут бігають —
+цілься наперед.*), the showdown (*А ось і ватажок! Дуель!*), *Стріляй!* on
+the draw, High Noon and who won it, the gold coin and the sheriff's star, a
+hit (*Ох! Тебе зачепило!*), a townsman shot, *Останнє життя!* on the last
+star, and every lesson of the tutorial, read out. Calls that come often have
+two or three variants, picked at random, so the game does not nag in one
+tone. The lines are in `laserapp/west_words.py`; none of them is shown on
+screen, so they are written to be heard.
+
+They are spoken by the same model as the story's Ukrainian voices -
+StyleTTS2 trained on Ukrainian speech (MIT, so the recordings ship freely) -
+in one of its own voices, a man's with a wide swing in pitch
+(`./build_story_audio.sh west`, about six minutes for all of them). The model
+works out where each word's stress falls; the few it gets wrong here are put
+right in `STRESS` in `west_words.py`. A line is either a call, quicker and
+with the street's echo, or calm and slower for the tutorial. Each is said
+three times and the take that fits is kept: the liveliest for a call, the
+middle one for a calm line, and never one whose length is wrong for its
+words.
+
+**Sound and sight.** Every bullet is a revolver going off - a crack, the
+blast, a thump and the street's echo - with what it hit after it: a thud, a
+ricochet, a bottle breaking. The pointer is a gun sight in the player's
+colour that kicks open as it fires, and misses leave bullet holes in the
+walls for a few seconds.
 
 #### Two players
 
@@ -541,7 +728,7 @@ stays lit**. That one rule makes the rest work:
 * **Two bosses.** Every showdown is a boss each, drawing at the same moment;
   the street is only won when both are down.
 * **High Noon.** After streets 2 and 4 the two meet: a bottle on a post on
-  each side, the bell, *DRAW!* - first to break their own bottle takes the
+  each side, the bell, *СТРІЛЯЙ!* - first to break their own bottle takes the
   round, first to two rounds wins the match and 500 points. Shooting before
   the shout gives the round away. Nobody gets hurt: it is bottles, not each
   other.
@@ -667,10 +854,18 @@ A figure nobody shoots in time scores 0. The top five series are kept in
 
 ### Without a laser
 
-**M** switches the pointer to the mouse: holding the left button stands in for
-the beam being lit, so flash and dwell work exactly the same. Useful for
-trying the game out, or for checking the app on a machine with no laser to
-hand. `--mouse-pointer` starts in that mode.
+**M** switches the pointer to the mouse - or pick *Грати мишею* at the bottom
+of the camera chooser. Holding the left button stands in for the beam being
+lit, so a click is a shot and a held button a dwell, exactly as with the
+laser. Menu tiles, the end-of-game buttons, the name keyboard and the
+teacher's page take a single click rather than a hold.
+
+No camera is needed: without one the games and the menu run as usual, and
+only the camera's read-outs and the calibration keys are left out. The choice
+is remembered in `settings.json`, so the next start goes straight to the
+games. **M** again goes back to the laser (opening the camera chooser if
+there is no camera yet), and so does picking a camera; ESC from the chooser
+with no camera returns to the mouse. `--mouse-pointer` starts in mouse mode.
 
 ### A note on the colours
 
@@ -691,7 +886,7 @@ green: `(R, G, B) = (190, 255, 60)` is safe, `(255, 240, 60)` is not.
 | `G` | games (chooser; during a game, play it again) |
 | `P` | pause (during the game) |
 | `SPACE` / `ENTER` | next line / skip the scene (in the story) |
-| `M` | use the mouse as the pointer |
+| `M` | the mouse as the pointer, or back to the laser (remembered) |
 | `K` | calibrate automatically (no laser) |
 | `F` | auto-tune thresholds to the current scene |
 | `D` | camera preview: wide → with mask → off |
@@ -849,6 +1044,14 @@ accuracy, then solves and inverts a known homography:
     laserapp/duel_art.py     its figures, armed and unarmed
     laserapp/assets/duel/    its music and sound effects (tools/duel_audio.py)
     laserapp/sound.py        WAV playback, no dependencies
+    laserapp/mixer.py        sound effects mixed in-process, so they overlap
+    laserapp/west.py         Wild West: streets, showdowns, High Noon, one or two players
+    laserapp/west_art.py     its town and its people
+    laserapp/west_training.py its tutorial: four lessons, nothing lost
+    laserapp/west_words.py   its announcer's lines (recorded by tools/west_voice.py)
+    laserapp/jars.py         Jar Shoot: jar range and quick draw
+    laserapp/names.py        names for high scores, typed on an on-screen keyboard
+    laserapp/teacher.py      the teacher's settings for the maths games
     laserapp/assets/story/   the recorded voices, the sound effects, the music
     tools/story_music.py     makes the music again
     build_story_audio.sh     records the voices again (tools/story_audio.py)

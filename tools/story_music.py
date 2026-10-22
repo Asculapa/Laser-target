@@ -21,7 +21,7 @@ from typing import List, Sequence, Tuple
 import numpy as np
 
 from duel_audio import PLUCK, SAW, SOFT, SQUARE, clock, hat, kick, pitch, snare, voice
-from story_audio import RATE, mix, write
+from story_audio import MUSIC, RATE, level, mix, write
 
 OUT = Path(__file__).resolve().parent.parent / "laserapp" / "assets" / "story" / "music"
 
@@ -70,10 +70,11 @@ def rumble(seconds: float) -> np.ndarray:
     return x / np.abs(x).max()
 
 
-def finish(layers: Sequence[Tuple[Parts, float]], seconds: float, level: float,
+def finish(layers: Sequence[Tuple[Parts, float]], seconds: float, loud: float,
            drive: float = 1.8) -> np.ndarray:
     """The layers - each (its notes, the echo it gets) - as one loop, cut to
-    length: what rings on past the end would only be cut off by the start."""
+    length: what rings on past the end would only be cut off by the start.
+    `loud` is dB against the music's level, for a piece softer or louder."""
     n = int(seconds * RATE)
     x = np.zeros(n)
     for parts, delay in layers:
@@ -81,10 +82,10 @@ def finish(layers: Sequence[Tuple[Parts, float]], seconds: float, level: float,
             layer = echo(mix(parts), delay) if delay else mix(parts)
             m = min(n, len(layer))
             x[:m] += layer[:m]
-    x = np.tanh(drive * x / np.abs(x).max()) * level
+    x = np.tanh(drive * x / np.abs(x).max())
     fade = int(0.08 * RATE)
     x[-fade:] *= np.linspace(1.0, 0.0, fade)
-    return x
+    return level(x, MUSIC + loud, average=True)
 
 
 # -- 1: Sparks on the Wind --------------------------------------------------
@@ -113,7 +114,7 @@ def sparks() -> np.ndarray:
                 when = at + rng.integers(0, 8) * beat / 2 + beat / 4
                 note = int(rng.choice((0, 2, 4, 7, 9))) + 24
                 bells.append((when, voice(pitch(note, 2 * D), 0.6, BELL, 6.0) * 0.05))
-    return finish(((low, 0), (bells, 0.75 * beat), (lead, 0.75 * beat)), 16 * bar, 0.3)
+    return finish(((low, 0), (bells, 0.75 * beat), (lead, 0.75 * beat)), 16 * bar, 0.0)
 
 
 # -- 2: What the Dark Wants -------------------------------------------------
@@ -149,7 +150,7 @@ def siege() -> np.ndarray:
                 drums.append((at + beat_ * beat, snare() * 0.3))
             tune(lead, at, beat / 2, melody[b % 6], 4 * E, SQUARE, 0.14)
     return finish(((drums, 0), (low, 0), (mid, 0.75 * beat), (lead, 0.75 * beat)),
-                  18 * bar, 0.32, drive=2.4)
+                  18 * bar, 0.5, drive=2.4)
 
 
 # -- 3: Ships in the Dark ---------------------------------------------------
@@ -180,7 +181,7 @@ def ships() -> np.ndarray:
     sea = np.convolve(rng.standard_normal(len(t)), np.ones(40) / 40, mode="same")
     sea *= (0.5 - 0.5 * np.cos(2 * np.pi * t / (2 * bar))) ** 2
     return finish(((low, 0), (lead, 2 * step), ([(0.0, sea / np.abs(sea).max() * 0.09)], 0)),
-                  len(chords) * bar, 0.3)
+                  len(chords) * bar, 0.0)
 
 
 # -- 4: The Keepers' Stars --------------------------------------------------
@@ -200,7 +201,7 @@ def stars() -> np.ndarray:
             low.append((at, voice(pitch(root + note, D), bar, SOFT, 0.4, attack=1.2) * 0.07))
         for s, note in enumerate(bells_[b]):
             bells.append((at + s * bar / 4, voice(pitch(note, 4 * D), 2.5, BELL, 4.0) * 0.14))
-    return finish(((low, 0), (bells, 0.42)), len(chords) * bar, 0.26, drive=1.4)
+    return finish(((low, 0), (bells, 0.42)), len(chords) * bar, -1.5, drive=1.4)
 
 
 # -- 5: The Heart of the Storm ----------------------------------------------
@@ -242,7 +243,7 @@ def storm() -> np.ndarray:
         if b >= 8:
             tune(lead, at, beat / 2, melody[k], 8 * D, SQUARE, 0.24, vibrato=0.12)
     return finish(((drums, 0), (low, 0), (mid, 0.75 * beat), (lead, 0.75 * beat)),
-                  len(order) * bar, 0.38, drive=2.2)
+                  len(order) * bar, 2.0, drive=2.2)
 
 
 PIECES = (sparks, siege, ships, stars, storm)

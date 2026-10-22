@@ -80,8 +80,40 @@ def trim(x: np.ndarray, pad: float = 0.06) -> np.ndarray:
     return x[max(0, loud[0] - edge):loud[-1] + edge]
 
 
+# -- levels -----------------------------------------------------------------
+# Every sound in the app is set by how loud it is to the ear, not by its peak:
+# a gunshot and a voice that peak alike are far apart in loudness, the shot's
+# energy all in its first instants. Speech is what the rest is measured
+# against, and each kind of sound sits so many dB under it.
+SPEECH = -13.0       # dB on loudness(): every spoken line
+CUE = -5.0           # a signal to notice: a fanfare, a bell, the draw, a hit taken
+SHOT = -9.0          # the player's own shot, and what it hit
+TAP = -10.0          # a light hit or miss in the gentler games
+CHIRP = -13.0        # a click, a tick, a reload
+MUSIC = -11.0        # music, on its average and not its loudest moment
+PEAK = 0.97          # never above this, whatever the loudness asks
+
+
+def loudness(x: np.ndarray, average: bool = False) -> float:
+    """dB, roughly as the ear has it: the low end cut, the top lifted a
+    little, and the loudest 150 ms taken (or the whole, with `average`)."""
+    f = np.fft.rfftfreq(len(x), 1 / RATE)
+    lo, hi = (f / 60) ** 2, (f / 1500) ** 2
+    y = np.fft.irfft(np.fft.rfft(x) * lo / (1 + lo) * (1 + 0.58 * hi / (1 + hi)), len(x))
+    n = int(0.15 * RATE)
+    power = np.mean(y ** 2) if average or len(y) <= n else \
+        np.convolve(y ** 2, np.ones(n) / n, "valid").max()
+    return 10 * np.log10(power + 1e-12)
+
+
+def level(x: np.ndarray, under: float, average: bool = False) -> np.ndarray:
+    """`x` brought to `under` dB against speech (0 for speech itself)."""
+    gain = 10 ** ((SPEECH + under - loudness(x, average)) / 20)
+    return x * min(gain, PEAK / max(1e-6, np.abs(x).max()))
+
+
 def finish(x: np.ndarray, pitch: float, echo: float) -> np.ndarray:
-    """What every voice gets after the model: pitch, echo, an even level."""
+    """What every voice gets after the model: pitch, echo, the speech level."""
     x = trim(resample(x, pitch) if pitch != 1.0 else x)
     if echo:
         delay = int(0.11 * RATE)
@@ -89,7 +121,7 @@ def finish(x: np.ndarray, pitch: float, echo: float) -> np.ndarray:
         for k in range(3):
             wet[k * delay:k * delay + len(x)] += x * echo ** k
         x = wet
-    return x * (0.89 / max(1e-6, np.abs(x).max()))
+    return level(x, 0.0)
 
 
 def kokoro(args):
@@ -206,20 +238,20 @@ def effects() -> None:
     rumble -= np.convolve(rumble, np.ones(1500) / 1500, mode="same")    # no drift
     rumble *= np.exp(-4.0 * np.arange(len(rumble)) / len(rumble))
     made = {
-        "hit": (0.35, mix([(0, tone(880, 0.09)), (0.05, tone(1320, 0.12))])),
-        "gold": (0.35, mix([(i * 0.06, tone(f, 0.22, overtone=0.3))
+        "hit": (TAP, mix([(0, tone(880, 0.09)), (0.05, tone(1320, 0.12))])),
+        "gold": (CUE, mix([(i * 0.06, tone(f, 0.22, overtone=0.3))
                             for i, f in enumerate((1047, 1319, 1568, 2093))])),
-        "bad": (0.4, tone((190, 110), 0.28, decay=2.5, overtone=0.6)),
-        "lost": (0.4, tone((520, 150), 0.5, decay=3.0)),
-        "star": (0.35, tone(1175, 0.7, decay=5.0, overtone=0.35)),
-        "win": (0.4, mix([(i * 0.11, tone(f, 0.7, decay=5.0, overtone=0.3))
+        "bad": (CUE, tone((190, 110), 0.28, decay=2.5, overtone=0.6)),
+        "lost": (CUE, tone((520, 150), 0.5, decay=3.0)),
+        "star": (CUE, tone(1175, 0.7, decay=5.0, overtone=0.35)),
+        "win": (CUE, mix([(i * 0.11, tone(f, 0.7, decay=5.0, overtone=0.3))
                           for i, f in enumerate((523, 659, 784, 1047, 1319))])),
-        "boom": (0.6, mix([(0, rumble / np.abs(rumble).max()),
+        "boom": (CUE, mix([(0, rumble / np.abs(rumble).max()),
                            (0, tone((120, 45), 0.9, decay=4.0))])),
-        "tick": (0.25, tone(660, 0.05)),
+        "tick": (CHIRP, tone(660, 0.05)),
     }
-    for name, (level, x) in made.items():
-        write(OUT, name, x * (level / np.abs(x).max()))
+    for name, (under, x) in made.items():
+        write(OUT, name, level(x, under))
     print(f"effects: {', '.join(made)}")
 
 

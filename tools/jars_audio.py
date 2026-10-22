@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from duel_audio import PLUCK, SAW, SOFT, clock, hat, kick, pitch, rng, snare, voice
-from story_audio import RATE, mix, tone, write
+from story_audio import CUE, MUSIC, RATE, TAP, level, mix, tone, write
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -127,15 +127,15 @@ def effects() -> dict:
                  for i, f in enumerate((1047, 1319, 1568, 2093))])
     buzz = clock(0.4)
     return {
-        "hit": (0.5, smash()),
-        "gold": (0.5, mix([(0, smash()), (0.05, chime * 0.8)])),
-        "miss": (0.3, rng.standard_normal(len(thud)) * np.exp(-45 * thud)
+        "hit": (TAP, smash()),
+        "gold": (CUE, mix([(0, smash()), (0.05, chime * 0.8)])),
+        "miss": (TAP - 3, rng.standard_normal(len(thud)) * np.exp(-45 * thud)
                  + tone((110, 60), 0.12, decay=4.0)),
-        "bad": (0.4, np.sign(np.sin(2 * np.pi * 140 * buzz)) * np.exp(-2.5 * buzz) * 0.6
+        "bad": (CUE, np.sign(np.sin(2 * np.pi * 140 * buzz)) * np.exp(-2.5 * buzz) * 0.6
                 + tone(70, 0.4, decay=2.0)),
-        "point": (0.4, mix([(0, tone(988, 0.25, decay=4.0, overtone=0.2)),
+        "point": (CUE, mix([(0, tone(988, 0.25, decay=4.0, overtone=0.2)),
                             (0.1, tone(1319, 0.5, decay=4.0, overtone=0.2))])),
-        "win": (0.45, mix([(i * 0.13, tone(f, 0.9 if i == 4 else 0.3, decay=4.0, overtone=0.3))
+        "win": (CUE, mix([(i * 0.13, tone(f, 0.9 if i == 4 else 0.3, decay=4.0, overtone=0.3))
                            for i, f in enumerate((392, 494, 587, 784, 988))])),
     }
 
@@ -143,11 +143,11 @@ def effects() -> dict:
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     x = music()
-    write(OUT, "music", x * 0.4)
+    write(OUT, "music", level(x, MUSIC, average=True))
     print(f"music: {len(x) / RATE:.1f}s")
     made = effects()
-    for name, (level, x) in made.items():
-        write(OUT, name, x * (level / np.abs(x).max()))
+    for name, (under, x) in made.items():
+        write(OUT, name, level(x, under))
     print(f"effects: {', '.join(made)}")
     return 0
 

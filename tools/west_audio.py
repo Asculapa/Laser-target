@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from duel_audio import PLUCK, SAW, clock, hat, kick, pitch, rng, snare, voice
-from story_audio import RATE, mix, tone, write
+from story_audio import CHIRP, CUE, MUSIC, RATE, SHOT, level, mix, tone, write
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "laserapp" / "assets" / "west" / "sound"
@@ -282,42 +282,42 @@ def effects() -> dict:
                    * 0.25) for i in range(14)])
     clang = sum(tone(f, 0.5, decay=d) * a for f, a, d in ((620, 1.0, 6), (1480, 0.6, 9), (2330, 0.4, 12)))
     return {
-        "hit": (0.9, mix([(0, shot()), (0.03, rng.standard_normal(len(thud))
+        "hit": (SHOT, mix([(0, shot()), (0.03, rng.standard_normal(len(thud))
                                         * np.exp(-30 * thud) * 0.35
                                         + tone((140, 70), 0.2, decay=5.0) * 0.6)])),
-        "miss": (0.9, mix([(0, shot()), (0.07, ricochet * 0.35)])),
-        "enemy": (0.95, mix([(0, shot(1.5, far=0.5)), (0.3, shot(1.5, far=1.0) * 0.25)])),
-        "hurt": (0.9, mix([(0, shot(1.5, far=0.3)), (0.12, tone((300, 180), 0.3, decay=3.0,
+        "miss": (SHOT, mix([(0, shot()), (0.07, ricochet * 0.35)])),
+        "enemy": (CUE, mix([(0, shot(1.5, far=0.5)), (0.3, shot(1.5, far=1.0) * 0.25)])),
+        "hurt": (CUE, mix([(0, shot(1.5, far=0.3)), (0.12, tone((300, 180), 0.3, decay=3.0,
                                                                   overtone=0.4) * 0.35)])),
-        "oops": (0.9, mix([(0, shot()), (0.2, tone(520, 0.2, decay=3.0, overtone=0.3) * 0.4),
+        "oops": (SHOT, mix([(0, shot()), (0.2, tone(520, 0.2, decay=3.0, overtone=0.3) * 0.4),
                            (0.43, tone(390, 0.35, decay=3.0, overtone=0.3) * 0.4)])),
-        "bottle": (0.9, mix([(0, shot()), (0.03, glass * 0.35), (0.04, shards)])),
-        "clang": (0.9, mix([(0, shot()), (0.03, clang * 0.45)])),
-        "coin": (0.9, mix([(0, shot()), (0.05, tone(1319, 0.12, decay=3.0, overtone=0.3) * 0.45),
+        "bottle": (SHOT, mix([(0, shot()), (0.03, glass * 0.35), (0.04, shards)])),
+        "clang": (SHOT, mix([(0, shot()), (0.03, clang * 0.45)])),
+        "coin": (SHOT, mix([(0, shot()), (0.05, tone(1319, 0.12, decay=3.0, overtone=0.3) * 0.45),
                            (0.13, tone(1976, 0.4, decay=4.0, overtone=0.3) * 0.45)])),
-        "star": (0.9, mix([(0, shot())] + [(0.05 + i * 0.07, tone(f, 0.35, decay=4.0, overtone=0.3) * 0.4)
+        "star": (SHOT, mix([(0, shot())] + [(0.05 + i * 0.07, tone(f, 0.35, decay=4.0, overtone=0.3) * 0.4)
                                           for i, f in enumerate((784, 988, 1175, 1568))])),
-        "bell": (0.45, bell),
-        "draw": (0.5, tone((1500, 2600), 0.35, decay=1.5)),       # a whistle: now!
-        "click": (0.45, mix([(0, tone(2400, 0.03, decay=6.0)), (0, tone(900, 0.04, decay=8.0) * 0.5)])),
-        "reload": (0.4, mix([(i * 0.07, tone(1800 + 150 * i, 0.03, decay=6.0)) for i in range(6)]
+        "bell": (CUE, bell),
+        "draw": (CUE, tone((1500, 2600), 0.35, decay=1.5)),       # a whistle: now!
+        "click": (CHIRP, mix([(0, tone(2400, 0.03, decay=6.0)), (0, tone(900, 0.04, decay=8.0) * 0.5)])),
+        "reload": (CHIRP, mix([(i * 0.07, tone(1800 + 150 * i, 0.03, decay=6.0)) for i in range(6)]
                             + [(0.45, tone((700, 1100), 0.08, decay=3.0))])),
-        "clear": (0.45, mix([(i * 0.14, tone(f, 0.9 if i == 4 else 0.3, decay=4.0, overtone=0.3))
+        "clear": (CUE, mix([(i * 0.14, tone(f, 0.9 if i == 4 else 0.3, decay=4.0, overtone=0.3))
                              for i, f in enumerate((330, 392, 494, 659, 784))])),
     }
 
 
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
-    for level, (title, piece) in enumerate(STREETS):
+    for n, (title, piece) in enumerate(STREETS):
         x = piece()
-        loud = (0.06, 0.075, 0.09)[level]               # and each louder than the last
-        write(OUT, f"music{level + 1}", x * (loud / np.sqrt(np.mean(x ** 2))))
-        print(f"music{level + 1}: {title}, {len(x) / RATE:.1f}s")
+        loud = MUSIC + (-1.5, 0.0, 1.5)[n]              # and each louder than the last
+        write(OUT, f"music{n + 1}", level(x, loud, average=True))
+        print(f"music{n + 1}: {title}, {len(x) / RATE:.1f}s")
     (OUT / "music.wav").unlink(missing_ok=True)
     made = effects()
-    for name, (level, x) in made.items():
-        write(OUT, name, x * (level / np.abs(x).max()))
+    for name, (under, x) in made.items():
+        write(OUT, name, level(x, under))
     print(f"effects: {', '.join(made)}")
     return 0
 

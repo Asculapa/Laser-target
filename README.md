@@ -451,6 +451,16 @@ chapter whose file is missing simply plays without. On Windows the music is
 played through MCI, beside `winsound`, so that it does not cut the effects
 off; if that does not work on a machine, there is everything but the music.
 
+**Levels.** Every sound in the app, in every game, is set by how loud it is
+to the ear rather than by its peak: a gunshot and a voice that peak alike
+are far apart, the shot's energy all in its first instants. `level()` in
+`tools/story_audio.py` measures it (the low end cut, the top lifted a
+little, the loudest 150 ms) and the generators place each sound against
+speech: a cue to notice - a fanfare, a bell, the draw, a hit taken - 5 dB
+under it, the player's own shot 9 dB under, a light hit 10, a click or tick
+13, and music 11 under on its average, give or take a piece meant to be
+softer or louder. Change those numbers there and run the generators again.
+
 The words are kept apart from the code, one file per language:
 `laserapp/story_words_en.py` and `story_words_uk.py` hold every spoken line
 and every label on screen. After changing a line, record it again:

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from story_audio import RATE, mix, tone, write
+from story_audio import CUE, MUSIC, RATE, TAP, level, mix, tone, write
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -169,12 +169,12 @@ def effects() -> dict:
     click = rng.standard_normal(len(t)) * np.exp(-400 * t) * 0.6
     thud = clock(0.12)
     return {
-        "hit": (0.4, plate + click),
-        "bad": (0.45, mix([(0, tone((200, 120), 0.3, decay=2.0, overtone=0.7)),
+        "hit": (TAP, plate + click),
+        "bad": (CUE, mix([(0, tone((200, 120), 0.3, decay=2.0, overtone=0.7)),
                            (0.16, tone((150, 90), 0.34, decay=2.5, overtone=0.7))])),
-        "miss": (0.3, rng.standard_normal(len(thud)) * np.exp(-45 * thud)
+        "miss": (TAP - 3, rng.standard_normal(len(thud)) * np.exp(-45 * thud)
                  + tone((110, 60), 0.12, decay=4.0)),
-        "win": (0.45, mix([(i * 0.13, tone(f, 0.9 if i == 4 else 0.3, decay=4.0, overtone=0.3))
+        "win": (CUE, mix([(i * 0.13, tone(f, 0.9 if i == 4 else 0.3, decay=4.0, overtone=0.3))
                            for i, f in enumerate((523, 523, 659, 784, 1047))])),
     }
 
@@ -182,11 +182,11 @@ def effects() -> dict:
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     x = music()
-    write(OUT, "music", x * 0.4)
+    write(OUT, "music", level(x, MUSIC, average=True))
     print(f"music: {len(x) / RATE:.1f}s")
     made = effects()
-    for name, (level, x) in made.items():
-        write(OUT, name, x * (level / np.abs(x).max()))
+    for name, (under, x) in made.items():
+        write(OUT, name, level(x, under))
     print(f"effects: {', '.join(made)}")
     return 0
 
